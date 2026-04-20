@@ -1,0 +1,51 @@
+{
+  "workflow_name": "sdxl_ui_icon_base",
+  "workflow_type": "baseline_generation",
+  "task": "game_ui_icon_generation",
+  "description": "Placeholder workflow definition for SDXL-based game UI icon generation. Replace with exported ComfyUI workflow JSON later.",
+  "model": {
+    "family": "stable-diffusion-xl",
+    "base_model": "stabilityai/stable-diffusion-xl-base-1.0",
+    "vae": "default",
+    "lora_enabled": false,
+    "controlnet_enabled": false,
+    "ip_adapter_enabled": false
+  },
+  "inputs": {
+    "positive_prompt_file": "prompts/ui_icons/positive.txt",
+    "negative_prompt_file": "prompts/ui_icons/negative.txt",
+    "width": 1024,
+    "height": 1024,
+    "batch_size": 1,
+    "num_images": 8,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.0,
+    "sampler": "euler_a",
+    "scheduler": "karras",
+    "seed": 42
+  },
+  "output": {
+    "output_dir": "outputs/ui_icons/baseline",
+    "save_metadata": true,
+    "save_prompt_copy": true
+  },
+  "status": {
+    "is_placeholder": true,
+    "runnable_in_comfyui": false,
+    "next_action": "Replace this file with an exported ComfyUI workflow after baseline graph construction."
+  },
+  "planned_nodes": [
+    "CheckpointLoaderSimple",
+    "CLIPTextEncode (positive)",
+    "CLIPTextEncode (negative)",
+    "EmptyLatentImage",
+    "KSampler",
+    "VAEDecode",
+    "SaveImage"
+  ],
+  "notes": [
+    "This workflow is intended for baseline UI icon generation.",
+    "Focus on readability, centered composition, and clean silhouette.",
+    "Later extensions may include LoRA, IP-Adapter, and style-specific prompt packs."
+  ]
+}

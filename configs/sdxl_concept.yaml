@@ -1,0 +1,112 @@
+project:
+  name: "game-aigc-asset-workflow"
+  task_group: "game_asset_generation"
+  stage: "baseline_concept"
+  description: "Task-specific config for SDXL-based character concept and stylized concept art generation."
+
+paths:
+  data_root: "data"
+  raw_data_dir: "data/raw"
+  interim_data_dir: "data/interim"
+  processed_data_dir: "data/processed"
+  metadata_dir: "data/metadata"
+
+  prompts_root: "prompts"
+  workflows_root: "workflows/comfyui"
+  configs_root: "configs"
+
+  outputs_root: "outputs"
+  results_root: "results"
+  logs_root: "logs"
+
+  examples_input_dir: "examples/inputs"
+  examples_output_dir: "examples/outputs"
+
+  ue5_validation_dir: "ue5_validation"
+  ue5_screenshots_dir: "ue5_validation/screenshots"
+
+runtime:
+  seed: 42
+  device: "cuda"
+  dtype: "fp16"
+  mixed_precision: true
+
+task:
+  type: "baseline_generation"
+  asset_type: "character_concept"
+  scenario: "game_concept_art"
+  target_engine: "UE5"
+
+model:
+  family: "stable-diffusion-xl"
+  base_model_name: "stabilityai/stable-diffusion-xl-base-1.0"
+  variant: "sdxl_base"
+  use_lora: false
+  lora_path: ""
+  use_controlnet: false
+  controlnet_model_name: ""
+  use_ip_adapter: false
+  ip_adapter_path: ""
+
+generation:
+  prompt_file: "prompts/character_concepts/positive.txt"
+  negative_prompt_file: "prompts/character_concepts/negative.txt"
+  width: 1024
+  height: 1024
+  num_images: 6
+  batch_size: 1
+  num_inference_steps: 35
+  guidance_scale: 7.5
+  sampler: "dpmpp_2m"
+  scheduler: "karras"
+  clip_skip: 0
+  output_subdir: "outputs/character_concepts/baseline"
+
+preprocess:
+  enabled: false
+  mode: "none"
+  keep_original: true
+  resize:
+    enabled: true
+    width: 1024
+    height: 1024
+    keep_aspect_ratio: true
+    pad_to_target: true
+  edge:
+    enabled: false
+    method: "canny"
+    threshold1: 100
+    threshold2: 200
+  mask:
+    enabled: false
+    source: "manual_or_placeholder"
+
+data:
+  dataset_name: "game_character_concept_placeholder"
+  metadata_file: "data/metadata/character_concept_metadata.csv"
+  caption_source: "manual"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  shuffle: true
+
+evaluation:
+  enabled: true
+  dimensions:
+    - "style_consistency"
+    - "character_readability"
+    - "composition_quality"
+    - "downstream_concept_usability"
+  save_report: true
+  report_format: "md"
+  report_file: "results/character_concepts/concept_baseline_report.md"
+
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "logs/sdxl_concept.log"
+
+notes:
+  status: "baseline_ready"
+  owner: "to_be_filled"
+  remarks: "Baseline SDXL config for character concept and stylized concept art generation. Suitable for later extension with reference-guided generation or LoRA style adaptation."

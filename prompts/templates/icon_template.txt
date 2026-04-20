@@ -1,0 +1,1 @@
+Create a high-quality game UI icon of {subject}, in {style} style, with {attributes}. The icon should have a clean silhouette, centered composition, high readability, strong contrast, polished rendering, and a simple background suitable for production-ready game UI usage.

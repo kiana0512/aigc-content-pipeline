@@ -1,0 +1,110 @@
+project:
+  name: "game-aigc-asset-workflow"
+  task_group: "game_asset_generation"
+  stage: "lora_experiment"
+  description: "Configuration skeleton for small-scale LoRA fine-tuning experiments on game visual styles."
+
+paths:
+  data_root: "data"
+  raw_data_dir: "data/raw"
+  interim_data_dir: "data/interim"
+  processed_data_dir: "data/processed"
+  metadata_dir: "data/metadata"
+
+  prompts_root: "prompts"
+  workflows_root: "workflows/comfyui"
+  configs_root: "configs"
+
+  outputs_root: "outputs"
+  results_root: "results"
+  logs_root: "logs"
+
+  train_data_dir: "data/processed/lora_train"
+  val_data_dir: "data/processed/lora_val"
+  checkpoint_dir: "checkpoints/lora"
+  preview_dir: "outputs/lora_previews"
+
+runtime:
+  seed: 42
+  device: "cuda"
+  dtype: "fp16"
+  mixed_precision: true
+
+task:
+  type: "lora_finetuning"
+  asset_type: "style_adaptation"
+  scenario: "game_visual_style"
+  target_engine: "UE5"
+
+model:
+  family: "stable-diffusion-xl"
+  base_model_name: "stabilityai/stable-diffusion-xl-base-1.0"
+  variant: "sdxl_base"
+  tokenizer_name: "openai/clip-vit-large-patch14"
+  vae_name: "madebyollin/sdxl-vae-fp16-fix"
+
+lora:
+  enabled: true
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules:
+    - "to_q"
+    - "to_k"
+    - "to_v"
+    - "to_out.0"
+
+training:
+  train_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0001
+  lr_scheduler: "constant"
+  lr_warmup_steps: 0
+  max_train_steps: 2000
+  num_train_epochs: 10
+  checkpointing_steps: 500
+  save_total_limit: 3
+  validation_steps: 250
+  gradient_checkpointing: true
+  use_8bit_adam: false
+  dataloader_num_workers: 4
+
+data:
+  dataset_name: "game_style_lora_placeholder"
+  metadata_file: "data/metadata/lora_train_metadata.csv"
+  image_column: "image_path"
+  caption_column: "caption"
+  caption_source: "manual_or_cleaned"
+  resolution: 1024
+  center_crop: false
+  random_flip: false
+  shuffle: true
+
+validation:
+  enabled: true
+  prompt_file: "prompts/templates/style_template.txt"
+  negative_prompt_file: "prompts/ui_icons/negative.txt"
+  num_validation_images: 4
+  validation_guidance_scale: 7.0
+  validation_inference_steps: 30
+
+evaluation:
+  enabled: true
+  dimensions:
+    - "style_similarity"
+    - "overfitting_risk"
+    - "generation_stability"
+    - "downstream_usability"
+  save_report: true
+  report_format: "md"
+  report_file: "results/lora/lora_train_report.md"
+
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "logs/lora_train.log"
+
+notes:
+  status: "placeholder_ready"
+  owner: "to_be_filled"
+  remarks: "Small-scale LoRA training config for style adaptation experiments. Parameters should be refined after dataset preparation and baseline workflow validation."

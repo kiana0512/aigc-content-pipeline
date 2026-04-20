@@ -1,0 +1,127 @@
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Conda
+# =========================
+.conda/
+conda-meta/
+
+# =========================
+# IDE / Editor
+# =========================
+.idea/
+.vscode/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Testing / cache / build
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+htmlcov/
+build/
+dist/
+
+# =========================
+# Local config / secrets
+# =========================
+.env
+.env.*
+*.local
+secrets.yaml
+secrets.yml
+
+# =========================
+# Data
+# Keep folder structure, ignore actual data files
+# =========================
+data/raw/*
+data/interim/*
+data/processed/*
+data/metadata/*
+
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/metadata/.gitkeep
+
+# =========================
+# Model checkpoints / weights
+# =========================
+models/
+checkpoints/
+weights/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.engine
+*.safetensors
+
+# =========================
+# Outputs / experiment results
+# =========================
+outputs/
+results/
+runs/
+tmp/
+temp/
+
+examples/outputs/*
+!examples/outputs/.gitkeep
+
+ue5_validation/screenshots/*
+!ue5_validation/screenshots/.gitkeep
+
+# =========================
+# ComfyUI / diffusion workflow artifacts
+# =========================
+comfyui_output/
+comfyui_temp/
+*.latent
+*.npz
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.swp
+*.tmp

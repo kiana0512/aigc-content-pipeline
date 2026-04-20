@@ -1,0 +1,17 @@
+Style target:
+{style_name}
+
+Style description:
+{style_description}
+
+Visual keywords:
+{visual_keywords}
+
+Color tendency:
+{color_palette}
+
+Rendering tendency:
+{rendering_style}
+
+Usage notes:
+{usage_notes}

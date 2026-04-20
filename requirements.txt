@@ -1,0 +1,35 @@
+# =========================
+# Core numerical / utility
+# =========================
+numpy
+pandas
+pyyaml
+tqdm
+
+# =========================
+# Image processing
+# =========================
+opencv-python
+pillow
+matplotlib
+
+# =========================
+# Deep learning
+# =========================
+torch
+torchvision
+torchaudio
+
+# =========================
+# Hugging Face / diffusion
+# =========================
+diffusers
+transformers
+accelerate
+safetensors
+huggingface-hub
+
+# =========================
+# Optional but useful
+# =========================
+requests

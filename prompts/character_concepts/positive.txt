@@ -1,0 +1,10 @@
+masterpiece, best quality, game character concept art, character design sheet style, full character focus, visually clear design, strong silhouette, well-structured costume, layered outfit details, stylized rendering, appealing proportions, professional concept art, fantasy game art, readable accessories, coherent color design, clean composition, high-detail character illustration, polished lighting, production-oriented concept design, suitable for game development reference
+
+Character placeholder:
+{character_subject}
+
+Style placeholder:
+{style}
+
+Optional attribute placeholder:
+{attributes}
