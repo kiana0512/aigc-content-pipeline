@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+import sys
 from pathlib import Path
 
-from PIL import Image
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+from src.evaluation.report_builder import build_markdown_report, save_markdown_report
+from src.generation.result_parser import build_directory_summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,14 +31,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def iter_images(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    ]
-
-
 def main() -> None:
     args = parse_args()
 
@@ -46,47 +41,23 @@ def main() -> None:
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    images = iter_images(input_dir)
-    if not images:
+    summary = build_directory_summary(input_dir)
+    if summary["num_images"] <= 0:
         print(f"[WARN] No images found in: {input_dir}")
         return
 
-    ext_counter = Counter()
-    size_counter = Counter()
-    total_bytes = 0
-
-    for image_path in images:
-        ext_counter[image_path.suffix.lower()] += 1
-        total_bytes += image_path.stat().st_size
-
-        with Image.open(image_path) as img:
-            size_counter[f"{img.width}x{img.height}"] += 1
-
-    avg_size_mb = total_bytes / len(images) / 1024 / 1024
-
-    lines = [
-        "# Output Evaluation Report",
-        "",
-        f"- Input directory: `{input_dir.as_posix()}`",
-        f"- Number of images: **{len(images)}**",
-        f"- Average file size: **{avg_size_mb:.2f} MB**",
-        "",
-        "## File Extension Distribution",
-        "",
-    ]
-
-    for ext, count in sorted(ext_counter.items()):
-        lines.append(f"- {ext}: {count}")
-
-    lines.extend(["", "## Resolution Distribution", ""])
-    for size, count in sorted(size_counter.items()):
-        lines.append(f"- {size}: {count}")
-
-    lines.extend(["", "## Sample Files", ""])
-    for image_path in images[:10]:
-        lines.append(f"- {image_path.as_posix()}")
-
-    report_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report_content = build_markdown_report(
+        title="Output Evaluation Report",
+        summary={
+            "input_dir": summary["input_dir"],
+            "num_images": summary["num_images"],
+            "avg_size_mb": f"{summary['avg_size_mb']:.2f}",
+            "extension_distribution": summary["extension_distribution"],
+            "resolution_distribution": summary["resolution_distribution"],
+            "sample_files": summary["sample_files"],
+        },
+    )
+    save_markdown_report(report_content, report_out)
 
     print(f"[OK] Evaluation report written to: {report_out}")
 

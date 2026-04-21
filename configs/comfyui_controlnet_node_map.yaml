@@ -1,0 +1,48 @@
+meta:
+  name: "controlnet_edge_ui_icon_node_map"
+  workflow_format: "comfyui_api_prompt"
+  notes: >
+    Example mapping for ControlNet edge-guided icon workflow.
+    This file is a prepared interface map and requires real node ids from
+    your exported ComfyUI API workflow.
+    Baseline recommendation: patch SaveImage.filename_prefix only.
+
+required:
+  positive_prompt:
+    node_id: "6"
+    input_key: "text"
+  negative_prompt:
+    node_id: "7"
+    input_key: "text"
+  latent_size:
+    node_id: "5"
+    width_key: "width"
+    height_key: "height"
+  sampler:
+    node_id: "3"
+    seed_key: "seed"
+    steps_key: "steps"
+    cfg_key: "cfg"
+    sampler_key: "sampler_name"
+    scheduler_key: "scheduler"
+
+optional:
+  save_image:
+    node_id: "12"
+    filename_prefix_key: "filename_prefix"
+    # Optional advanced case only. Keep empty in baseline.
+    output_dir_key: ""
+  lora:
+    node_id: ""
+    enabled_key: ""
+    path_key: "lora_name"
+    strength_key: "strength_model"
+  controlnet:
+    enabled_node_id: ""
+    enabled_key: ""
+    model_node_id: "10"
+    model_key: "control_net_name"
+    strength_node_id: "11"
+    strength_key: "strength"
+    image_node_id: "8"
+    image_key: "image"

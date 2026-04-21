@@ -14,6 +14,11 @@ paths:
   prompts_root: "prompts"
   workflows_root: "workflows/comfyui"
   configs_root: "configs"
+  comfyui_models_root: "ComfyUI/models"
+  comfyui_checkpoints_dir: "ComfyUI/models/checkpoints"
+  comfyui_vae_dir: "ComfyUI/models/vae"
+  comfyui_loras_dir: "ComfyUI/models/loras"
+  comfyui_controlnet_dir: "ComfyUI/models/controlnet"
 
   outputs_root: "outputs"
   results_root: "results"
@@ -43,8 +48,10 @@ model:
   variant: "sdxl_base"
   use_lora: false
   lora_path: ""
+  lora_strength: 1.0
   use_controlnet: false
   controlnet_model_name: ""
+  controlnet_strength: 0.8
   use_ip_adapter: false
   ip_adapter_path: ""
 
@@ -61,6 +68,65 @@ generation:
   scheduler: "karras"
   clip_skip: 0
   output_subdir: "outputs/character_concepts/baseline"
+
+comfyui:
+  enabled: true
+  base_url: "http://127.0.0.1:8188"
+  mode: "patch_workflow"
+  workflow_json: "workflows/comfyui/sdxl_concept_base.json"
+  node_map: "configs/comfyui_concept_node_map.yaml"
+  save_patched_workflows_dir: "results/patched_workflows/character_concepts"
+  workflow_model_family: "classic_checkpoint"
+  workflow_model_requirements:
+    required:
+      - "checkpoints"
+    recommended:
+      - "vae"
+    optional:
+      - "embeddings"
+      - "loras"
+      - "controlnet"
+      - "style_models"
+  strict_model_dir_check: false
+  patch_save_image_output_dir: false
+  save_image_output_dir: ""
+
+comfyui_models:
+  root: "ComfyUI/models"
+  mainline_required:
+    checkpoints: "ComfyUI/models/checkpoints"
+    diffusion_models: "ComfyUI/models/diffusion_models"
+    vae: "ComfyUI/models/vae"
+    text_encoders: "ComfyUI/models/text_encoders"
+  common_extensions:
+    clip_vision: "ComfyUI/models/clip_vision"
+    loras: "ComfyUI/models/loras"
+    controlnet: "ComfyUI/models/controlnet"
+    embeddings: "ComfyUI/models/embeddings"
+    style_models: "ComfyUI/models/style_models"
+    upscale_models: "ComfyUI/models/upscale_models"
+    latent_upscale_models: "ComfyUI/models/latent_upscale_models"
+    photomaker: "ComfyUI/models/photomaker"
+    gligen: "ComfyUI/models/gligen"
+    hypernetworks: "ComfyUI/models/hypernetworks"
+    audio_encoders: "ComfyUI/models/audio_encoders"
+  advanced_optional:
+    diffusers: "ComfyUI/models/diffusers"
+    vae_approx: "ComfyUI/models/vae_approx"
+    classifiers: "ComfyUI/models/classifiers"
+    model_patches: "ComfyUI/models/model_patches"
+    download_model_base: "ComfyUI/models/download_model_base"
+
+lora:
+  enabled: false
+  path: ""
+  strength: 1.0
+
+controlnet:
+  enabled: false
+  model_name: ""
+  control_image_path: ""
+  strength: 0.8
 
 preprocess:
   enabled: false

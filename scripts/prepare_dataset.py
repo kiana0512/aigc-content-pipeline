@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import re
-import shutil
+import sys
 from pathlib import Path
-from typing import Iterable
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.data import copy_and_normalize_images, write_metadata_csv
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,19 +48,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def iter_image_files(root: Path) -> Iterable[Path]:
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
-            yield path
-
-
-def normalize_text(text: str) -> str:
-    text = text.strip().lower()
-    text = re.sub(r"\s+", "_", text)
-    text = re.sub(r"[^a-z0-9_\-]+", "", text)
-    return text or "sample"
-
-
 def main() -> None:
     args = parse_args()
 
@@ -70,52 +58,17 @@ def main() -> None:
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    metadata_out.parent.mkdir(parents=True, exist_ok=True)
-
-    image_files = list(iter_image_files(input_dir))
-    if not image_files:
+    rows = copy_and_normalize_images(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        prefix=args.prefix,
+        dataset_name=args.dataset_name,
+    )
+    if not rows:
         print(f"[WARN] No image files found in: {input_dir}")
         return
 
-    rows = []
-    for index, src_path in enumerate(image_files, start=1):
-        stem = normalize_text(src_path.stem)
-        ext = src_path.suffix.lower()
-        new_name = f"{args.prefix}_{index:05d}_{stem}{ext}"
-        dst_path = output_dir / new_name
-
-        shutil.copy2(src_path, dst_path)
-
-        rows.append(
-            {
-                "dataset_name": args.dataset_name,
-                "original_path": str(src_path.as_posix()),
-                "processed_path": str(dst_path.as_posix()),
-                "original_name": src_path.name,
-                "processed_name": new_name,
-                "stem": stem,
-                "caption": "",
-                "split": "",
-            }
-        )
-
-    with metadata_out.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "dataset_name",
-                "original_path",
-                "processed_path",
-                "original_name",
-                "processed_name",
-                "stem",
-                "caption",
-                "split",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+    write_metadata_csv(rows, metadata_out)
 
     print(f"[OK] Copied {len(rows)} images to: {output_dir}")
     print(f"[OK] Metadata written to: {metadata_out}")

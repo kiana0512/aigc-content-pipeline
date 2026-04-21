@@ -192,8 +192,8 @@ Possible focus points:
 
 The current priority is:
 
-1. complete project scaffolding
-2. finish documentation and config placeholders
-3. build baseline prompt assets
-4. add first workflow and script placeholders
-5. start baseline generation experiments
+1. replace placeholder workflows with real ComfyUI API exports
+2. align real node ids in node mapping YAML files
+3. run first SDXL baseline rounds for UI icons and character concepts
+4. record baseline prompts, seeds, samplers, schedulers, and image sizes
+5. start first controlled baseline comparison and prompt iteration

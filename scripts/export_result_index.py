@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import csv
-from datetime import datetime
+import sys
 from pathlib import Path
 
-from PIL import Image
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+from src.generation.result_parser import export_image_index_csv
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,48 +40,16 @@ def main() -> None:
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    rows = []
-    for path in sorted(input_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
-            continue
-
-        stat = path.stat()
-        with Image.open(path) as img:
-            width, height = img.width, img.height
-
-        rows.append(
-            {
-                "relative_path": str(path.relative_to(input_dir).as_posix()),
-                "absolute_path": str(path.as_posix()),
-                "extension": path.suffix.lower(),
-                "width": width,
-                "height": height,
-                "size_bytes": stat.st_size,
-                "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            }
-        )
-
-    if not rows:
+    try:
+        export_image_index_csv(input_dir=input_dir, output_csv=output_csv)
+    except ValueError:
         print(f"[WARN] No images found in: {input_dir}")
         return
 
-    with output_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "relative_path",
-                "absolute_path",
-                "extension",
-                "width",
-                "height",
-                "size_bytes",
-                "modified_time",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+    with output_csv.open("r", encoding="utf-8") as f:
+        row_count = max(sum(1 for _ in f) - 1, 0)
 
-    print(f"[OK] Exported result index with {len(rows)} rows to: {output_csv}")
+    print(f"[OK] Exported result index with {row_count} rows to: {output_csv}")
 
 
 if __name__ == "__main__":

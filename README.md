@@ -67,3 +67,17 @@ src/             core Python modules
 tests/           unit tests
 ue5_validation/  UE5-side usability notes and screenshots
 workflows/       ComfyUI workflow json files and notes
+```
+
+## ComfyUI Integration Notes
+
+- This repo uses ComfyUI API-format workflow patching (`patch_workflow`) as the main integration path.
+- Model-family labels such as `classic_checkpoint` and `split_model` are project compatibility abstractions.
+- `strict_model_dir_check` can be used to control directory declaration behavior:
+  - `false`: report warnings for missing required declarations
+  - `true`: fail fast on missing required declarations
+
+See:
+- `docs/comfyui_baseline_setup.md`
+- `docs/comfyui_model_folders.md`
+- `docs/comfyui_usage_zh.md`

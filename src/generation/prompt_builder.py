@@ -94,7 +94,10 @@ def write_prompt_pack(items: list[PromptItem], output_dir: str | Path) -> Path:
         prompt_path.write_text(item.positive_prompt_text + "\n", encoding="utf-8")
 
         item.positive_prompt_path = str(prompt_path.as_posix())
-        rows.append(asdict(item))
+        row = asdict(item)
+        # Keep backward-compatible columns used by earlier script versions.
+        row["negative_prompt"] = item.negative_prompt_text
+        rows.append(row)
 
     csv_path = output_dir / "prompt_pack.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -108,6 +111,7 @@ def write_prompt_pack(items: list[PromptItem], output_dir: str | Path) -> Path:
                 "positive_prompt_text",
                 "negative_prompt_text",
                 "positive_prompt_path",
+                "negative_prompt",
             ],
         )
         writer.writeheader()

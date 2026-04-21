@@ -1,154 +1,71 @@
 # Workflow Notes
 
-## Purpose
+## 1. Current Status
 
-This document records the purpose, current status, and future replacement plan for the workflow files stored under `workflows/comfyui/`.
+`workflows/comfyui/*.json` files in repo are still placeholder artifacts.
 
-At the current stage, the JSON files in that folder are placeholder definitions rather than final exported ComfyUI graphs.
+They are planning anchors and filename contracts, not runnable API prompts yet.
 
-They are used to:
-- clarify workflow responsibilities
-- keep repository structure complete
-- prepare for later replacement with real ComfyUI workflow exports
-- support documentation and experiment planning
+## 2. Format Boundary
 
----
+Two workflow formats must not be mixed:
 
-## Current Workflow Files
+- UI workflow JSON (editor graph format)
+- API workflow JSON (execution prompt format)
 
-### 1. `sdxl_ui_icon_base.json`
+`patch_workflow` mode only supports API workflow JSON.
 
-#### Purpose
-Baseline workflow definition for game UI icon generation.
+## 3. Replacement Steps
 
-#### Current Role
-- stores baseline task metadata
-- records target prompt files and output directory
-- defines expected sampling settings
-- serves as the future placeholder for the actual ComfyUI-exported workflow
+When real graph is ready:
 
-#### Main Focus
-- icon readability
-- centered composition
-- clean silhouette
-- asset reusability for game UI scenarios
+1. Build and verify in ComfyUI UI.
+2. Export via **File -> Export (API)**.
+3. Replace the placeholder file.
+4. Update mapping YAML node ids.
 
-#### Replacement Plan
-Replace with a real ComfyUI workflow export after:
-- SDXL base graph is built
-- prompt inputs are verified
-- batch output path is tested
+## 4. Baseline Priority
 
----
+Current first-stage priority:
 
-### 2. `sdxl_concept_base.json`
+1. `sdxl_ui_icon_base.json`
+2. `sdxl_concept_base.json`
 
-#### Purpose
-Baseline workflow definition for character concept art and stylized concept generation.
+These are checkpoint-family image baselines.
 
-#### Current Role
-- records baseline concept-art generation setup
-- defines concept-art prompt source and output path
-- serves as a placeholder for future exported workflow JSON
+## 5. Compatibility Direction (Beyond SDXL Baseline)
 
-#### Main Focus
-- character design readability
-- style consistency
-- costume structure
-- concept-art usability for game production reference
+Future workflow support direction includes split-model families:
 
-#### Replacement Plan
-Replace with a real ComfyUI workflow export after:
-- baseline concept-art graph is built
-- generation parameters are validated
-- output organization scheme is confirmed
+- Qwen-family image/video style workflows
+- FLUX-family workflows
+- Hunyuan Video-like workflows
 
----
+Those families often require:
 
-### 3. `controlnet_edge_icon.json`
+- `diffusion_models`
+- `text_encoders`
+- `vae`
 
-#### Purpose
-Controllable generation workflow definition for UI icon generation with edge-map guidance.
+instead of checkpoint-only loading.
 
-#### Current Role
-- records the planned ControlNet experiment path
-- connects OpenCV preprocessing with downstream generation
-- defines future baseline-vs-guided comparison direction
+`classic_checkpoint / split_model / conditioning / postprocess / media_extension`
+are project-level compatibility abstractions, not official ComfyUI terminology.
 
-#### Main Focus
-- structure control
-- silhouette clarity
-- shape readability
-- controllability under icon-generation scenarios
+## 6. Adapter / Node Map Principle
 
-#### Replacement Plan
-Replace with a real ComfyUI workflow export after:
-- edge extraction script is implemented
-- control image directory format is fixed
-- ControlNet graph is constructed and tested
+Node mapping and adapter logic must stay workflow-agnostic:
 
----
+- do not hardcode checkpoint-only assumptions
+- keep requirements declared by config
+- keep patch layer focused on explicit node/input mapping
 
-## Recommended Workflow Development Order
+## 7. Baseline Patch Scope (Current)
 
-### Step 1
-Build and validate `sdxl_ui_icon_base`
+Current patch scope remains:
 
-### Step 2
-Build and validate `sdxl_concept_base`
+- positive / negative prompt
+- seed / width / height / steps / cfg / sampler / scheduler
+- `SaveImage.filename_prefix`
 
-### Step 3
-Implement OpenCV preprocessing for edge extraction
-
-### Step 4
-Build and validate `controlnet_edge_icon`
-
-### Step 5
-Add optional workflow variants:
-- LoRA-enhanced icon workflow
-- reference-guided concept workflow
-- IP-Adapter-based consistency workflow
-
----
-
-## Suggested Comparison Dimensions
-
-When comparing workflows later, focus on:
-
-### For UI Icons
-- readability
-- silhouette clarity
-- visual focus
-- production usability
-- style consistency
-
-### For Character Concepts
-- design readability
-- costume detail coherence
-- composition quality
-- style consistency
-- downstream concept usability
-
-### For ControlNet Variants
-- structure adherence
-- whether style quality drops
-- whether generation becomes more stable
-- whether outputs become more reusable
-
----
-
-## Notes for Future Export
-
-When real ComfyUI graphs are ready, exported workflow files should:
-- replace the placeholder JSON files directly
-- keep the same filenames if possible
-- preserve a short note in this file about what changed
-- record the model / sampler / scheduler used at export time
-
----
-
-## Current Status
-
-Current status: placeholder stage
-
-This folder is structurally ready, but the workflow JSON files should still be replaced later by real ComfyUI-exported graphs.
+LoRA and ControlNet remain interface hooks, not full end-to-end runtime platform in this stage.

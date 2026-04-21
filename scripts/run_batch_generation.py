@@ -1,16 +1,42 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
+import sys
 from pathlib import Path
+from typing import Any
 
-import yaml
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.generation.comfyui_adapter import (
+    ComfyUIAdapterError,
+    PLACEHOLDER_WORKFLOW_ERROR,
+    WorkflowPatchParams,
+    load_node_mapping,
+    load_workflow_json,
+    patch_workflow,
+    save_workflow_json,
+)
+from src.generation.comfyui_client import ComfyUIClient
+from src.generation.prompt_builder import sanitize_filename
+from src.generation.workflow_runner import (
+    build_comfyui_model_compatibility_report,
+    build_run_manifest,
+    load_prompt_pack_csv,
+    load_yaml_config,
+    resolve_comfyui_settings,
+    save_manifest_json,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a batch generation manifest from config and prompt pack."
+        description=(
+            "Batch generation entrypoint supporting manifest creation, ComfyUI workflow "
+            "patching, and optional ComfyUI API submission."
+        )
     )
     parser.add_argument(
         "--config",
@@ -30,70 +56,304 @@ def parse_args() -> argparse.Namespace:
         default="results/run_manifest.json",
         help="Path to save run manifest JSON.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["manifest", "patch_workflow", "submit"],
+        default="manifest",
+        help=(
+            "Run mode. `submit` is experimental and intended for lightweight "
+            "integration testing."
+        ),
+    )
+    parser.add_argument(
+        "--workflow-json",
+        type=str,
+        default="",
+        help="Path to ComfyUI workflow JSON (override config.comfyui.workflow_json).",
+    )
+    parser.add_argument(
+        "--node-map",
+        type=str,
+        default="",
+        help="Path to ComfyUI node mapping YAML (override config.comfyui.node_map).",
+    )
+    parser.add_argument(
+        "--patched-output-dir",
+        type=str,
+        default="",
+        help=(
+            "Directory for patched workflows (override "
+            "config.comfyui.save_patched_workflows_dir)."
+        ),
+    )
+    parser.add_argument(
+        "--comfyui-url",
+        type=str,
+        default="",
+        help="ComfyUI server URL for submit mode (override config.comfyui.base_url).",
+    )
+    parser.add_argument(
+        "--client-id",
+        type=str,
+        default="",
+        help="Optional ComfyUI client id for submit mode.",
+    )
     return parser.parse_args()
 
 
-def load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _resolve_required_path(
+    cli_value: str,
+    config_value: str,
+    label: str,
+) -> Path:
+    resolved = cli_value.strip() or str(config_value).strip()
+    if not resolved:
+        raise ValueError(
+            f"{label} is required for this mode. Set CLI arg or config field."
+        )
+    return Path(resolved)
 
 
-def load_prompt_pack(path: Path) -> list[dict]:
-    with path.open("r", newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+def _build_item_prefix(item: dict[str, Any], index: int) -> str:
+    item_id = str(item.get("id", "")).strip()
+    subject = str(item.get("subject", f"item_{index:03d}"))
+    safe_subject = sanitize_filename(subject) or f"item_{index:03d}"
+
+    if item_id.isdigit():
+        return f"{int(item_id):03d}_{safe_subject}"
+    return f"item_{index:03d}_{safe_subject}"
+
+
+def _build_patch_params(
+    manifest: dict[str, Any],
+    item: dict[str, Any],
+    index: int,
+    comfy_settings: dict[str, Any],
+) -> WorkflowPatchParams:
+    output_dir: str | None = None
+    if bool(comfy_settings.get("patch_save_image_output_dir", False)):
+        raw_output_dir = str(comfy_settings.get("save_image_output_dir", "")).strip()
+        output_dir = raw_output_dir or None
+
+    return WorkflowPatchParams(
+        positive_prompt=str(item.get("positive_prompt", "")),
+        negative_prompt=str(item.get("negative_prompt", "")),
+        seed=int(manifest.get("seed", 42)),
+        width=int(manifest.get("width", 1024)),
+        height=int(manifest.get("height", 1024)),
+        steps=int(manifest.get("num_inference_steps", 30)),
+        cfg=float(manifest.get("guidance_scale", 7.0)),
+        sampler=str(manifest.get("sampler", "euler")),
+        scheduler=str(manifest.get("scheduler", "normal")),
+        filename_prefix=_build_item_prefix(item, index),
+        output_dir=output_dir,
+        use_lora=bool(comfy_settings.get("use_lora", False)),
+        lora_path=str(comfy_settings.get("lora_path", "")),
+        lora_strength=float(comfy_settings.get("lora_strength", 1.0)),
+        use_controlnet=bool(comfy_settings.get("use_controlnet", False)),
+        controlnet_model_name=str(comfy_settings.get("controlnet_model_name", "")),
+        controlnet_strength=float(comfy_settings.get("controlnet_strength", 0.8)),
+        control_image_path=str(
+            item.get("control_image_path", comfy_settings.get("control_image_path", ""))
+        ),
+    )
+
+
+def _patch_all_workflows(
+    base_workflow: dict[str, Any],
+    node_mapping: dict[str, Any],
+    manifest: dict[str, Any],
+    comfy_settings: dict[str, Any],
+) -> list[dict[str, Any]]:
+    patched: list[dict[str, Any]] = []
+    for index, item in enumerate(manifest.get("items", []), start=1):
+        params = _build_patch_params(manifest, item, index, comfy_settings)
+        patched_workflow = patch_workflow(base_workflow, node_mapping, params)
+        patched.append(
+            {
+                "item_id": item.get("id", index),
+                "subject": item.get("subject", ""),
+                "filename_prefix": params.filename_prefix,
+                "workflow": patched_workflow,
+            }
+        )
+    return patched
+
+
+def _extract_prompt_graph(payload: dict[str, Any]) -> dict[str, Any]:
+    prompt = payload.get("prompt")
+    if isinstance(prompt, dict):
+        return prompt
+    return payload
+
+
+def _print_model_compatibility_report(report: dict[str, Any]) -> None:
+    print(f"[INFO] ComfyUI workflow model family: {report['model_family']}")
+    print(f"[INFO] {report['model_family_note']}")
+    print("[INFO] Required model directories: " + ", ".join(report["required_dirs"]))
+
+    if report["recommended_dirs"]:
+        print(
+            "[INFO] Recommended model directories: "
+            + ", ".join(report["recommended_dirs"])
+        )
+
+    if report["optional_dirs"]:
+        print("[INFO] Optional model directories: " + ", ".join(report["optional_dirs"]))
+
+    if report["missing_required_dirs"]:
+        level = "WARN" if not report["strict"] else "ERROR"
+        print(
+            f"[{level}] Missing required model directory declarations: "
+            + ", ".join(report["missing_required_dirs"])
+        )
+
+    if report["missing_recommended_dirs"]:
+        print(
+            "[WARN] Missing recommended model directory declarations: "
+            + ", ".join(report["missing_recommended_dirs"])
+        )
+
+    if report["missing_optional_dirs"]:
+        print(
+            "[INFO] Missing optional model directory declarations: "
+            + ", ".join(report["missing_optional_dirs"])
+        )
+
+
+def run_patch_mode(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    comfy_settings = resolve_comfyui_settings(config)
+    workflow_path = _resolve_required_path(
+        args.workflow_json,
+        comfy_settings.get("workflow_json", ""),
+        "ComfyUI workflow JSON",
+    )
+    node_map_path = _resolve_required_path(
+        args.node_map,
+        comfy_settings.get("node_map", ""),
+        "ComfyUI node mapping YAML",
+    )
+    patched_output_dir = Path(
+        args.patched_output_dir.strip()
+        or comfy_settings.get("save_patched_workflows_dir", "results/patched_workflows")
+    )
+
+    base_workflow = load_workflow_json(workflow_path)
+    node_mapping = load_node_mapping(node_map_path)
+    patched_runs = _patch_all_workflows(base_workflow, node_mapping, manifest, comfy_settings)
+
+    patched_output_dir.mkdir(parents=True, exist_ok=True)
+    index_rows = []
+    for item in patched_runs:
+        filename = f"{item['filename_prefix']}.json"
+        output_path = patched_output_dir / filename
+        save_workflow_json(item["workflow"], output_path)
+        index_rows.append(
+            {
+                "item_id": item["item_id"],
+                "subject": item["subject"],
+                "patched_workflow": str(output_path.as_posix()),
+            }
+        )
+
+    index_json = patched_output_dir / "patched_workflow_index.json"
+    index_json.write_text(json.dumps(index_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[OK] Patched workflow files generated: {len(index_rows)}")
+    print(f"[OK] Output directory: {patched_output_dir}")
+    print(f"[OK] Patched workflow index: {index_json}")
+
+
+def run_submit_mode(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    print("[INFO] Submit mode is experimental and best suited for smoke tests.")
+    comfy_settings = resolve_comfyui_settings(config)
+    workflow_path = _resolve_required_path(
+        args.workflow_json,
+        comfy_settings.get("workflow_json", ""),
+        "ComfyUI workflow JSON",
+    )
+    node_map_path = _resolve_required_path(
+        args.node_map,
+        comfy_settings.get("node_map", ""),
+        "ComfyUI node mapping YAML",
+    )
+    comfyui_url = args.comfyui_url.strip() or comfy_settings.get(
+        "base_url", "http://127.0.0.1:8188"
+    )
+
+    base_workflow = load_workflow_json(workflow_path)
+    node_mapping = load_node_mapping(node_map_path)
+    patched_runs = _patch_all_workflows(base_workflow, node_mapping, manifest, comfy_settings)
+
+    client = ComfyUIClient(base_url=comfyui_url)
+    submit_results = []
+    for item in patched_runs:
+        response = client.submit_prompt(
+            _extract_prompt_graph(item["workflow"]),
+            client_id=args.client_id.strip() or None,
+        )
+        submit_results.append(
+            {
+                "item_id": item["item_id"],
+                "subject": item["subject"],
+                "response": response,
+            }
+        )
+
+    submit_log_path = Path("results/comfyui_submit_results.json")
+    submit_log_path.parent.mkdir(parents=True, exist_ok=True)
+    submit_log_path.write_text(
+        json.dumps(submit_results, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"[OK] Submitted {len(submit_results)} workflows to ComfyUI: {comfyui_url}")
+    print(f"[OK] Submission results saved to: {submit_log_path}")
 
 
 def main() -> None:
     args = parse_args()
 
-    config = load_yaml(Path(args.config))
-    prompt_rows = load_prompt_pack(Path(args.prompt_pack))
-    output_json = Path(args.output_json)
-    output_json.parent.mkdir(parents=True, exist_ok=True)
+    config = load_yaml_config(Path(args.config))
+    prompt_rows = load_prompt_pack_csv(Path(args.prompt_pack))
+    manifest = build_run_manifest(config, prompt_rows)
 
-    generation_cfg = config.get("generation", {})
-    runtime_cfg = config.get("runtime", {})
-    task_cfg = config.get("task", {})
-    model_cfg = config.get("model", {})
+    try:
+        model_report = build_comfyui_model_compatibility_report(config)
+        _print_model_compatibility_report(model_report)
 
-    manifest = {
-        "project_name": config.get("project", {}).get("name", "unknown_project"),
-        "task_type": task_cfg.get("type", "unknown_task"),
-        "asset_type": task_cfg.get("asset_type", "unknown_asset"),
-        "model_family": model_cfg.get("family", "unknown_family"),
-        "base_model_name": model_cfg.get("base_model_name", "unknown_model"),
-        "seed": runtime_cfg.get("seed", 42),
-        "width": generation_cfg.get("width", 1024),
-        "height": generation_cfg.get("height", 1024),
-        "num_inference_steps": generation_cfg.get("num_inference_steps", 30),
-        "guidance_scale": generation_cfg.get("guidance_scale", 7.0),
-        "sampler": generation_cfg.get("sampler", "unknown_sampler"),
-        "scheduler": generation_cfg.get("scheduler", "unknown_scheduler"),
-        "output_subdir": generation_cfg.get("output_subdir", "outputs/placeholder"),
-        "items": [],
-    }
+        output_json = Path(args.output_json)
+        save_manifest_json(manifest, output_json)
+        print(f"[OK] Run manifest created: {output_json}")
+        print(f"[OK] Number of generation items: {len(manifest['items'])}")
 
-    for row in prompt_rows:
-        positive_prompt_path = Path(row["positive_prompt_path"])
-        positive_prompt = positive_prompt_path.read_text(encoding="utf-8").strip()
+        if args.mode == "manifest":
+            print(
+                "[INFO] Current stage: manifest generation only, no direct ComfyUI execution."
+            )
+            return
 
-        manifest["items"].append(
-            {
-                "id": row["id"],
-                "subject": row["subject"],
-                "style": row["style"],
-                "attributes": row["attributes"],
-                "positive_prompt": positive_prompt,
-                "negative_prompt": row["negative_prompt"],
-            }
-        )
-
-    with output_json.open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-
-    print(f"[OK] Run manifest created: {output_json}")
-    print(f"[OK] Number of generation items: {len(manifest['items'])}")
-    print("[INFO] Current stage: manifest generation only, no direct ComfyUI execution yet.")
+        if args.mode == "patch_workflow":
+            run_patch_mode(args, config, manifest)
+            return
+        if args.mode == "submit":
+            run_submit_mode(args, config, manifest)
+            return
+    except ComfyUIAdapterError as exc:
+        if str(exc) == PLACEHOLDER_WORKFLOW_ERROR:
+            raise SystemExit(str(exc)) from exc
+        raise SystemExit(f"ComfyUI compatibility error: {exc}") from exc
+    except Exception as exc:
+        raise SystemExit(f"Batch run failed in mode `{args.mode}`: {exc}") from exc
 
 
 if __name__ == "__main__":

@@ -68,6 +68,36 @@ The current baseline technical stack is:
 
 ---
 
+## 2026-04-21
+
+### Scaffold to ComfyUI Baseline Integration Preparation
+
+#### Summary
+Promoted the repository from scaffold stage to a practical ComfyUI baseline integration preparation stage, while keeping placeholder workflow JSON files explicit.
+
+#### Main Changes
+- added ComfyUI adapter module for API workflow patching
+- added external node mapping YAML mechanism (no hardcoded node ids)
+- upgraded batch generation script to support:
+  - `manifest`
+  - `patch_workflow`
+  - optional `submit`
+- aligned task configs with ComfyUI connection fields and future LoRA/ControlNet hooks
+- refactored scripts to thin CLI entrypoints that call `src` modules
+- added local tests for workflow patching and placeholder detection
+
+#### Scope Decisions
+- prioritized SDXL baseline for UI icon and character concept tasks
+- kept UE5 automation out of this phase (docs only)
+- kept LoRA / ControlNet as disabled-by-default interfaces
+
+#### Next Step
+- replace placeholder workflow JSON files with real ComfyUI API exports
+- fill real node ids in node mapping YAML files
+- run baseline patching and first ComfyUI execution round
+
+---
+
 ## Logging Template
 
 Use the following format for future updates.
