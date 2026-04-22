@@ -1,83 +1,118 @@
 # game-aigc-asset-workflow
 
-An experimental AIGC workflow for game-oriented asset generation, focusing on controllable image generation for character concepts, UI icons, and stylized visual assets.
+面向游戏资产生成的 AIGC 实验工作流仓库，当前阶段聚焦 ComfyUI + Stable Diffusion/SDXL 的基线接入与 workflow-first 自动化落地。
 
-## Overview
+## 项目定位
 
-This repository is built around practical game art production scenarios.  
-Instead of treating image generation as a simple text-to-image demo, this project focuses on building a reusable workflow that covers:
+本仓库不是 ComfyUI 本体，也不是“一站式全模型平台”。  
+当前目标是构建一个可复用、可追踪、可迭代的游戏资产生成实验流水线，重点场景包括：
 
-- prompt design and template reuse
-- parameter presets and batch generation
-- small-scale data preparation
-- controllable generation with structural guidance
-- result evaluation and workflow documentation
-- UE5-oriented asset usability validation
+- UI icon 基线生成
+- 角色概念图（character concept）基线生成
+- 提示词模板化与批量出图
+- 结果记录、索引与对比
 
-The current technical direction is centered on:
+## 当前已实现能力
 
-- **ComfyUI** for node-based workflow design
-- **Stable Diffusion / SDXL / SD3.5** for image generation
-- **LoRA** for lightweight fine-tuning and style adaptation
-- **ControlNet** for controllable generation
-- **OpenCV** for preprocessing and structural guidance
-- **PyTorch + diffusers** for model-side experimentation
-- **UE5** for downstream asset validation
+- ComfyUI API workflow patch（仅接受 API 格式 JSON）
+- placeholder / UI workflow JSON 严格拒绝
+- `manual_map` / `auto_detect` 双模式 patch
+- workflow-first 工具链：
+  - `inspect_workflow`
+  - `resolve_models`
+  - `suggest_mapping`
+  - `auto_patch_workflow`
+  - `workflow_import_pipeline`
+- 模型目录兼容表达（`comfyui_models`）与目录检查
+- LoRA / ControlNet 接口预留（默认关闭）
 
-## Project Goals
-
-The project aims to support several game-related visual content tasks, including:
-
-- character concept generation
-- UI icon generation
-- stylized concept art generation
-- style consistency exploration under small-data settings
-- reusable workflow and prompt asset accumulation
-
-This repository is intended to serve both as:
-
-1. a practical engineering project for game AIGC content production, and  
-2. a research exploration base for controllable and style-consistent generation.
-
-## Tech Stack
-
-- Python
-- PyTorch
-- diffusers
-- ComfyUI
-- Stable Diffusion / SDXL / SD3.5
-- LoRA
-- ControlNet
-- OpenCV
-- Pillow
-- NumPy / Pandas
-- YAML-based experiment configs
-- UE5
-
-## Repository Structure
+## 目录结构
 
 ```text
-configs/         experiment configs
-data/            raw / interim / processed / metadata
-docs/            roadmap, experiment logs, resume-ready summaries
-examples/        sample inputs and outputs
-prompts/         prompt templates and prompt packs
-scripts/         runnable utility scripts
-src/             core Python modules
-tests/           unit tests
-ue5_validation/  UE5-side usability notes and screenshots
-workflows/       ComfyUI workflow json files and notes
+configs/         配置文件（任务配置、node map、workflow-first 示例）
+data/            数据目录（raw/interim/processed/metadata）
+docs/            使用文档、路线图、实验日志、简历描述
+prompts/         prompt 模板与模板片段
+scripts/         CLI 入口脚本
+src/             核心实现模块
+tests/           本地测试
+workflows/       ComfyUI workflow JSON（含占位与示例）
 ```
 
-## ComfyUI Integration Notes
+## 快速开始
 
-- This repo uses ComfyUI API-format workflow patching (`patch_workflow`) as the main integration path.
-- Model-family labels such as `classic_checkpoint` and `split_model` are project compatibility abstractions.
-- `strict_model_dir_check` can be used to control directory declaration behavior:
-  - `false`: report warnings for missing required declarations
-  - `true`: fail fast on missing required declarations
+1. 准备好真实 ComfyUI API workflow JSON（`File -> Export (API)` 导出）
+2. 配置 `configs/*.yaml` 中的 `comfyui.workflow_json` / `node_map`
+3. 运行基础流程
 
-See:
-- `docs/comfyui_baseline_setup.md`
-- `docs/comfyui_model_folders.md`
-- `docs/comfyui_usage_zh.md`
+```bash
+# 1) 仅生成 manifest
+python scripts/run_batch_generation.py \
+  --config configs/sdxl_icon.yaml \
+  --prompt-pack outputs/prompt_pack/ui_icons/prompt_pack.csv \
+  --mode manifest
+
+# 2) 检查 workflow 结构
+python scripts/run_batch_generation.py \
+  --config configs/sdxl_icon.yaml \
+  --mode inspect_workflow
+
+# 3) 扫描并匹配本地模型
+python scripts/run_batch_generation.py \
+  --config configs/sdxl_icon.yaml \
+  --mode resolve_models \
+  --comfyui-root D:/ComfyUI
+
+# 4) 生成 mapping 建议
+python scripts/run_batch_generation.py \
+  --config configs/sdxl_icon.yaml \
+  --mode suggest_mapping
+
+# 5) 自动 patch（workflow-first）
+python scripts/run_batch_generation.py \
+  --config configs/sdxl_icon.yaml \
+  --prompt-pack outputs/prompt_pack/ui_icons/prompt_pack.csv \
+  --mode auto_patch_workflow
+```
+
+## workflow_import_pipeline（一键小闭环）
+
+`workflow_import_pipeline` / `prepare_workflow_import` 会顺序执行：
+
+1. inspect_workflow
+2. resolve_models
+3. suggest_mapping
+4. auto_patch_workflow（默认 patch manifest 第一条）
+
+输出目录统一为：
+
+`results/runs/<run_name>/`
+
+包含：
+
+- `workflow_inspection.json`
+- `model_resolution.json`
+- `mapping_suggestion.yaml`
+- `mapping_diff.md`
+- `mapping_manual_review.yaml`
+- `patch_report.json`
+- `patch_report.md`
+- `patched_workflow.json`
+- `run_manifest.json`
+
+## 重要边界
+
+- 仅支持真实 ComfyUI API workflow JSON
+- UI workflow JSON（含 `nodes` 列表）会直接报错
+- placeholder workflow JSON 会直接报错
+- submit 模式为实验性（smoke test 级别）
+- 当前不做 UE5 自动化
+- LoRA / ControlNet 当前是接口预留，不是完整训练/部署平台
+
+## 文档入口
+
+- `docs/comfyui_usage_zh.md`：中文使用总览（推荐先读）
+- `docs/workflow_import_zh.md`：workflow-first 导入与自动化详解
+- `docs/comfyui_baseline_setup.md`：ComfyUI 基线接入说明
+- `docs/comfyui_model_folders.md`：模型目录说明与任务-目录矩阵
+- `docs/experiment_log.md`：实验记录

@@ -5,6 +5,7 @@ import pytest
 from src.generation.comfyui_adapter import ComfyUIAdapterError
 from src.generation.workflow_runner import (
     build_comfyui_model_compatibility_report,
+    infer_model_dirs_from_inspection,
     resolve_comfyui_model_folders,
     resolve_workflow_model_requirements,
 )
@@ -124,3 +125,24 @@ def test_missing_required_directory_raises_in_strict_mode() -> None:
         build_comfyui_model_compatibility_report(config)
 
     assert "Missing required ComfyUI model directory declarations" in str(exc.value)
+
+
+def test_detected_family_can_override_declared_family() -> None:
+    config = _base_config()
+    config["comfyui"]["workflow_model_family"] = "classic_checkpoint"
+    config["comfyui"]["workflow_import"] = {"use_detected_family": True}
+    inspection = {"suggested_model_family": "split_model", "detected_model_files": []}
+    req = resolve_workflow_model_requirements(config, inspection_result=inspection)
+    assert req["model_family"] == "split_model"
+
+
+def test_infer_model_dirs_from_inspection_split_model() -> None:
+    inspection = {
+        "detected_model_files": [
+            {"model_kind": "unet"},
+            {"model_kind": "text_encoder"},
+            {"model_kind": "vae"},
+        ]
+    }
+    inferred = infer_model_dirs_from_inspection(inspection)
+    assert set(inferred["required"]) == {"diffusion_models", "text_encoders", "vae"}

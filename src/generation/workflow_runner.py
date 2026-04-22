@@ -12,6 +12,9 @@ from .comfyui_adapter import (
     resolve_model_dir_requirements,
     validate_model_directory_requirements,
 )
+from .mapping_suggester import suggest_node_mapping
+from .model_resolver import build_model_resolution_report
+from .workflow_inspector import inspect_workflow_path
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
@@ -118,8 +121,13 @@ def resolve_comfyui_settings(config: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(comfyui_cfg.get("enabled", False)),
         "base_url": str(comfyui_cfg.get("base_url", "http://127.0.0.1:8188")),
         "mode": str(comfyui_cfg.get("mode", "manifest")),
+        "mapping_mode": str(comfyui_cfg.get("mapping_mode", "manual_map")),
         "workflow_json": str(comfyui_cfg.get("workflow_json", "")),
         "node_map": str(comfyui_cfg.get("node_map", "")),
+        "comfyui_root": str(comfyui_cfg.get("comfyui_root", "ComfyUI")),
+        "workflow_import": comfyui_cfg.get("workflow_import", {}) or {},
+        "model_resolution_policy": comfyui_cfg.get("model_resolution_policy", {}) or {},
+        "report_output_dirs": comfyui_cfg.get("report_output_dirs", {}) or {},
         "save_patched_workflows_dir": str(
             comfyui_cfg.get("save_patched_workflows_dir", "results/patched_workflows")
         ),
@@ -213,11 +221,25 @@ def resolve_comfyui_model_folders(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def resolve_workflow_model_requirements(config: dict[str, Any]) -> dict[str, Any]:
+def resolve_workflow_model_requirements(
+    config: dict[str, Any],
+    inspection_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     comfyui_cfg = config.get("comfyui", {}) or {}
     requirement_cfg = comfyui_cfg.get("workflow_model_requirements", {}) or {}
+    workflow_import_cfg = comfyui_cfg.get("workflow_import", {}) or {}
 
-    model_family = comfyui_cfg.get("workflow_model_family", "classic_checkpoint")
+    detected_family = str(
+        (inspection_result or {}).get("suggested_model_family", "classic_checkpoint")
+    ).strip() or "classic_checkpoint"
+    declared_family = str(comfyui_cfg.get("workflow_model_family", "")).strip()
+    prefer_detected_family = bool(workflow_import_cfg.get("use_detected_family", False))
+    model_family = (
+        detected_family
+        if prefer_detected_family and inspection_result is not None
+        else (declared_family or detected_family)
+    )
+
     declared_required = _to_string_list(requirement_cfg.get("required", []))
     declared_recommended = _to_string_list(requirement_cfg.get("recommended", []))
     declared_optional = _to_string_list(requirement_cfg.get("optional", []))
@@ -225,6 +247,14 @@ def resolve_workflow_model_requirements(config: dict[str, Any]) -> dict[str, Any
     if not declared_recommended and declared_optional:
         declared_recommended = list(declared_optional)
         declared_optional = []
+
+    if inspection_result is not None and bool(
+        workflow_import_cfg.get("prefer_workflow_requirements", True)
+    ):
+        inferred = infer_model_dirs_from_inspection(inspection_result)
+        declared_required.extend(inferred["required"])
+        declared_recommended.extend(inferred["recommended"])
+        declared_optional.extend(inferred["optional"])
 
     resolved = resolve_model_dir_requirements(
         model_family=model_family,
@@ -236,9 +266,14 @@ def resolve_workflow_model_requirements(config: dict[str, Any]) -> dict[str, Any
     return resolved
 
 
-def build_comfyui_model_compatibility_report(config: dict[str, Any]) -> dict[str, Any]:
+def build_comfyui_model_compatibility_report(
+    config: dict[str, Any],
+    inspection_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     model_folders = resolve_comfyui_model_folders(config)
-    requirements = resolve_workflow_model_requirements(config)
+    requirements = resolve_workflow_model_requirements(
+        config, inspection_result=inspection_result
+    )
     validation = validate_model_directory_requirements(
         model_folders=model_folders["flat"],
         requirements=requirements,
@@ -256,6 +291,88 @@ def build_comfyui_model_compatibility_report(config: dict[str, Any]) -> dict[str
         "missing_recommended_dirs": validation["missing_recommended"],
         "missing_optional_dirs": validation["missing_optional"],
         "model_folder_map": model_folders["flat"],
+    }
+
+
+def inspect_workflow_from_config(
+    config: dict[str, Any], workflow_path: str | Path | None = None
+) -> dict[str, Any]:
+    comfyui = resolve_comfyui_settings(config)
+    target = str(workflow_path or comfyui.get("workflow_json", "")).strip()
+    if not target:
+        raise ValueError("Workflow JSON path is required for workflow inspection.")
+    return inspect_workflow_path(target)
+
+
+def resolve_models_from_config(
+    config: dict[str, Any],
+    inspection_result: dict[str, Any],
+    comfyui_root: str | Path | None = None,
+) -> dict[str, Any]:
+    comfyui = resolve_comfyui_settings(config)
+    model_folders = resolve_comfyui_model_folders(config)
+    root = str(comfyui_root or comfyui.get("comfyui_root") or "ComfyUI")
+    policy = comfyui.get("model_resolution_policy", {}) or {}
+    return build_model_resolution_report(
+        inspection_result=inspection_result,
+        comfyui_root=root,
+        model_dir_map=model_folders["flat"],
+        policy=policy,
+    )
+
+
+def suggest_mapping_from_config(
+    config: dict[str, Any],
+    inspection_result: dict[str, Any],
+    existing_mapping: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _ = config
+    return suggest_node_mapping(
+        inspection_result=inspection_result, existing_mapping=existing_mapping
+    )
+
+
+def resolve_report_output_dirs(config: dict[str, Any]) -> dict[str, str]:
+    comfyui_cfg = config.get("comfyui", {}) or {}
+    report_cfg = comfyui_cfg.get("report_output_dirs", {}) or {}
+    return {
+        "workflow_inspection": str(
+            report_cfg.get("workflow_inspection", "results/workflow_inspection")
+        ),
+        "model_resolution": str(
+            report_cfg.get("model_resolution", "results/model_resolution")
+        ),
+        "mapping_suggestions": str(
+            report_cfg.get("mapping_suggestions", "results/mapping_suggestions")
+        ),
+        "patch_reports": str(report_cfg.get("patch_reports", "results/patch_reports")),
+    }
+
+
+def infer_model_dirs_from_inspection(inspection_result: dict[str, Any]) -> dict[str, list[str]]:
+    model_kinds = {
+        str(item.get("model_kind", "")) for item in inspection_result.get("detected_model_files", [])
+    }
+    required: set[str] = set()
+    recommended: set[str] = set()
+    optional: set[str] = set()
+
+    if "checkpoint" in model_kinds:
+        required.add("checkpoints")
+        recommended.add("vae")
+    if {"unet", "text_encoder", "vae"}.issubset(model_kinds):
+        required.update({"diffusion_models", "text_encoders", "vae"})
+    if "lora" in model_kinds:
+        optional.add("loras")
+    if "controlnet" in model_kinds:
+        optional.add("controlnet")
+    if "clip_vision" in model_kinds:
+        optional.add("clip_vision")
+
+    return {
+        "required": sorted(required),
+        "recommended": sorted(recommended - required),
+        "optional": sorted(optional - required - recommended),
     }
 
 

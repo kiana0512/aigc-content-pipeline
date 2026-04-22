@@ -8,6 +8,9 @@ from typing import Any
 
 import yaml
 
+from .mapping_suggester import suggest_node_mapping
+from .workflow_inspector import inspect_workflow
+
 PLACEHOLDER_WORKFLOW_ERROR = (
     "Current workflow JSON is still a placeholder and cannot be patched. "
     "Please replace it with an actual ComfyUI-exported workflow first."
@@ -312,10 +315,68 @@ def validate_node_mapping(mapping: dict[str, Any]) -> None:
 
 def patch_workflow(
     workflow: dict[str, Any],
+    mapping: dict[str, Any] | None,
+    params: WorkflowPatchParams,
+    mapping_mode: str = "manual_map",
+) -> dict[str, Any]:
+    patched, _ = patch_workflow_with_report(
+        workflow=workflow,
+        mapping=mapping,
+        params=params,
+        mapping_mode=mapping_mode,
+    )
+    return patched
+
+
+def patch_workflow_with_report(
+    workflow: dict[str, Any],
+    mapping: dict[str, Any] | None,
+    params: WorkflowPatchParams,
+    mapping_mode: str = "manual_map",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    validate_workflow_json(workflow)
+    mode = str(mapping_mode or "manual_map").strip().lower()
+    if mode not in {"manual_map", "auto_detect"}:
+        raise ComfyUIAdapterError(
+            f"Unsupported mapping mode: `{mapping_mode}`. "
+            "Use `manual_map` or `auto_detect`."
+        )
+
+    if mode == "manual_map":
+        if not isinstance(mapping, dict):
+            raise NodeMappingError(
+                "manual_map mode requires a valid node mapping dictionary."
+            )
+        patched = _patch_workflow_manual(workflow, mapping, params)
+        report = {
+            "mapping_mode": "manual_map",
+            "patched_fields": [
+                "positive_prompt",
+                "negative_prompt",
+                "seed",
+                "width",
+                "height",
+                "steps",
+                "cfg",
+                "sampler",
+                "scheduler",
+            ],
+            "skipped_fields": [],
+            "unresolved_fields": [],
+            "missing_model_references": [],
+            "custom_node_notes": [],
+            "mapping_source": "manual_node_map",
+        }
+        return patched, report
+
+    return _patch_workflow_auto_detect(workflow=workflow, mapping_override=mapping, params=params)
+
+
+def _patch_workflow_manual(
+    workflow: dict[str, Any],
     mapping: dict[str, Any],
     params: WorkflowPatchParams,
 ) -> dict[str, Any]:
-    validate_workflow_json(workflow)
     validate_node_mapping(mapping)
 
     workflow_copy = copy.deepcopy(workflow)
@@ -396,14 +457,170 @@ def patch_workflow(
     return workflow_copy
 
 
+def _patch_workflow_auto_detect(
+    workflow: dict[str, Any],
+    mapping_override: dict[str, Any] | None,
+    params: WorkflowPatchParams,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    workflow_copy = copy.deepcopy(workflow)
+    prompt_graph = _extract_prompt_graph(workflow_copy)
+    inspection = inspect_workflow(workflow_copy)
+    suggestion = suggest_node_mapping(
+        inspection_result=inspection,
+        existing_mapping=mapping_override if isinstance(mapping_override, dict) else None,
+    )
+    auto_mapping = suggestion["mapping"]
+    confidence = suggestion.get("confidence", {})
+
+    report = {
+        "mapping_mode": "auto_detect",
+        "patched_fields": [],
+        "skipped_fields": [],
+        "unresolved_fields": [],
+        "missing_model_references": [],
+        "custom_node_notes": [
+            f"node {item.get('node_id')} / {item.get('class_type')}: {item.get('reason')}"
+            for item in inspection.get("unresolved_nodes", [])
+        ],
+        "needs_manual_confirmation": suggestion.get("needs_manual_confirmation", []),
+        "detected_mapping": auto_mapping,
+        "diff_vs_existing_mapping": suggestion.get("diff_vs_existing", {}),
+        "workflow_inspection": {
+            "workflow_format": inspection.get("workflow_format"),
+            "node_count": inspection.get("node_count"),
+            "detected_model_families": inspection.get("detected_model_families", []),
+            "suggested_model_family": inspection.get("suggested_model_family"),
+        },
+    }
+
+    required = auto_mapping.get("required", {})
+    override_paths = _collect_non_empty_mapping_paths(mapping_override)
+
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.positive_prompt",
+        node_id=str(required.get("positive_prompt", {}).get("node_id", "")),
+        input_key=str(required.get("positive_prompt", {}).get("input_key", "")),
+        value=params.positive_prompt,
+        label="positive_prompt",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.negative_prompt",
+        node_id=str(required.get("negative_prompt", {}).get("node_id", "")),
+        input_key=str(required.get("negative_prompt", {}).get("input_key", "")),
+        value=params.negative_prompt,
+        label="negative_prompt",
+        report=report,
+    )
+
+    latent = required.get("latent_size", {})
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.latent_size",
+        node_id=str(latent.get("node_id", "")),
+        input_key=str(latent.get("width_key", "")),
+        value=int(params.width),
+        label="width",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.latent_size",
+        node_id=str(latent.get("node_id", "")),
+        input_key=str(latent.get("height_key", "")),
+        value=int(params.height),
+        label="height",
+        report=report,
+    )
+
+    sampler = required.get("sampler", {})
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("seed_key", "")),
+        value=int(params.seed),
+        label="seed",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("steps_key", "")),
+        value=int(params.steps),
+        label="steps",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("cfg_key", "")),
+        value=float(params.cfg),
+        label="cfg",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("sampler_key", "")),
+        value=params.sampler,
+        label="sampler",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("scheduler_key", "")),
+        value=params.scheduler,
+        label="scheduler",
+        report=report,
+    )
+
+    _patch_save_image(prompt_graph, auto_mapping, params)
+    _patch_lora(prompt_graph, auto_mapping, params)
+    _patch_controlnet(prompt_graph, auto_mapping, params)
+
+    return workflow_copy, report
+
+
 def patch_workflow_from_paths(
     workflow_path: str | Path,
-    node_map_path: str | Path,
+    node_map_path: str | Path | None,
     params: WorkflowPatchParams,
+    mapping_mode: str = "manual_map",
 ) -> dict[str, Any]:
     workflow = load_workflow_json(workflow_path)
-    mapping = load_node_mapping(node_map_path)
-    return patch_workflow(workflow, mapping, params)
+    mapping = load_node_mapping(node_map_path) if node_map_path else None
+    return patch_workflow(
+        workflow=workflow,
+        mapping=mapping,
+        params=params,
+        mapping_mode=mapping_mode,
+    )
 
 
 def _patch_save_image(
@@ -586,6 +803,67 @@ def _patch_controlnet(
             True,
             label="controlnet_enabled",
         )
+
+
+def _auto_patch_required_field(
+    prompt_graph: dict[str, Any],
+    confidence: dict[str, str],
+    override_paths: set[str],
+    mapping_path: str,
+    node_id: str,
+    input_key: str,
+    value: Any,
+    label: str,
+    report: dict[str, Any],
+) -> None:
+    level = str(confidence.get(mapping_path, "low")).lower()
+    has_override = mapping_path in override_paths
+    if level != "high" and not has_override:
+        report["skipped_fields"].append(
+            f"{label} (low_confidence={level}, mapping_path={mapping_path})"
+        )
+        return
+    if not node_id or not input_key:
+        report["unresolved_fields"].append(
+            f"{label} (missing mapping fields at {mapping_path})"
+        )
+        return
+
+    try:
+        _set_input(
+            prompt_graph=prompt_graph,
+            node_id=node_id,
+            input_key=input_key,
+            value=value,
+            label=label,
+        )
+        report["patched_fields"].append(label)
+    except (ComfyUIAdapterError, NodeMappingError) as exc:
+        report["unresolved_fields"].append(f"{label}: {exc}")
+
+
+def _collect_non_empty_mapping_paths(mapping: dict[str, Any] | None) -> set[str]:
+    if not isinstance(mapping, dict):
+        return set()
+    paths: set[str] = set()
+
+    def walk(prefix: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for key, sub in value.items():
+                sub_path = f"{prefix}.{key}" if prefix else str(key)
+                walk(sub_path, sub)
+            return
+        if value is None:
+            return
+        if isinstance(value, str) and not value.strip():
+            return
+        if prefix:
+            parts = prefix.split(".")
+            if len(parts) >= 2:
+                paths.add(".".join(parts[:2]))
+
+    walk("", mapping)
+    return paths
 
 
 def _set_input(

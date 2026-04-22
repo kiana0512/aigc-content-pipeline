@@ -1,71 +1,48 @@
 # Workflow Notes
 
-## 1. Current Status
+## 1. 当前状态
 
-`workflows/comfyui/*.json` files in repo are still placeholder artifacts.
+`workflows/comfyui/*.json` 中仍有占位文件。  
+占位文件用于路径契约，不代表可直接运行。
 
-They are planning anchors and filename contracts, not runnable API prompts yet.
+## 2. 格式边界
 
-## 2. Format Boundary
+不要混用两种 JSON：
 
-Two workflow formats must not be mixed:
+- UI workflow JSON（编辑器图格式，常见 `nodes` 列表）
+- API workflow JSON（执行 prompt 格式，node-id 字典）
 
-- UI workflow JSON (editor graph format)
-- API workflow JSON (execution prompt format)
+`patch_workflow` 仅支持 API workflow JSON。
 
-`patch_workflow` mode only supports API workflow JSON.
+## 3. 替换步骤
 
-## 3. Replacement Steps
+1. 在 ComfyUI 中搭图并跑通  
+2. `File -> Export (API)` 导出真实 API JSON  
+3. 覆盖仓库对应 workflow 文件  
+4. 更新 node mapping 中的真实 node id  
 
-When real graph is ready:
+## 4. 当前基线优先级
 
-1. Build and verify in ComfyUI UI.
-2. Export via **File -> Export (API)**.
-3. Replace the placeholder file.
-4. Update mapping YAML node ids.
+1. `sdxl_ui_icon_base.json`  
+2. `sdxl_concept_base.json`  
 
-## 4. Baseline Priority
+## 5. 后续兼容方向（不仅 SDXL）
 
-Current first-stage priority:
-
-1. `sdxl_ui_icon_base.json`
-2. `sdxl_concept_base.json`
-
-These are checkpoint-family image baselines.
-
-## 5. Compatibility Direction (Beyond SDXL Baseline)
-
-Future workflow support direction includes split-model families:
-
-- Qwen-family image/video style workflows
-- FLUX-family workflows
-- Hunyuan Video-like workflows
-
-Those families often require:
+后续将逐步支持 split-model workflow（如 Qwen / FLUX / 视频家族思路），其常见目录需求为：
 
 - `diffusion_models`
 - `text_encoders`
 - `vae`
 
-instead of checkpoint-only loading.
+## 6. 术语说明
 
-`classic_checkpoint / split_model / conditioning / postprocess / media_extension`
-are project-level compatibility abstractions, not official ComfyUI terminology.
+`classic_checkpoint / split_model / conditioning / postprocess / media_extension`  
+是项目内部兼容抽象，不是 ComfyUI 官方术语。
 
-## 6. Adapter / Node Map Principle
-
-Node mapping and adapter logic must stay workflow-agnostic:
-
-- do not hardcode checkpoint-only assumptions
-- keep requirements declared by config
-- keep patch layer focused on explicit node/input mapping
-
-## 7. Baseline Patch Scope (Current)
-
-Current patch scope remains:
+## 7. patch 范围（当前实现）
 
 - positive / negative prompt
 - seed / width / height / steps / cfg / sampler / scheduler
 - `SaveImage.filename_prefix`
 
-LoRA and ControlNet remain interface hooks, not full end-to-end runtime platform in this stage.
+LoRA / ControlNet 目前仅接口预留，不是完整端到端平台。

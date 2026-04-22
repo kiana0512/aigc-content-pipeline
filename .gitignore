@@ -125,3 +125,5 @@ comfyui_temp/
 *.bak
 *.swp
 *.tmp
+temp_prompt_pack.csv
+tmp_prompt_pack.csv

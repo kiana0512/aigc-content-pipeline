@@ -1,4 +1,4 @@
-project:
+﻿project:
   name: "game-aigc-asset-workflow"
   task_group: "game_asset_generation"
   stage: "lora_experiment"
@@ -69,11 +69,17 @@ controlnet:
 
 comfyui:
   enabled: false
+  comfyui_root: "ComfyUI"
   base_url: "http://127.0.0.1:8188"
   mode: "manifest"
+  mapping_mode: "manual_map"
   workflow_json: "workflows/comfyui/sdxl_ui_icon_base.json"
   node_map: "configs/comfyui_ui_icon_node_map.yaml"
   save_patched_workflows_dir: "results/patched_workflows/lora_validation"
+  workflow_import:
+    enabled: true
+    use_detected_family: false
+    prefer_workflow_requirements: true
   workflow_model_family: "classic_checkpoint"
   workflow_model_requirements:
     required:
@@ -84,6 +90,18 @@ comfyui:
       - "embeddings"
       - "loras"
   strict_model_dir_check: false
+  model_resolution_policy:
+    case_insensitive: true
+    allow_stem_match: true
+    allow_fuzzy_match: true
+    fuzzy_cutoff: 0.6
+    aliases: {}
+    path_overrides: {}
+  report_output_dirs:
+    workflow_inspection: "results/workflow_inspection"
+    model_resolution: "results/model_resolution"
+    mapping_suggestions: "results/mapping_suggestions"
+    patch_reports: "results/patch_reports"
   patch_save_image_output_dir: false
   save_image_output_dir: ""
 
@@ -167,3 +185,6 @@ notes:
   status: "placeholder_ready"
   owner: "to_be_filled"
   remarks: "Small-scale LoRA training config for style adaptation experiments. Parameters should be refined after dataset preparation and baseline workflow validation."
+
+
+

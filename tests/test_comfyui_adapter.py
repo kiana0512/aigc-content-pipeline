@@ -15,6 +15,7 @@ from src.generation.comfyui_adapter import (
     load_node_mapping,
     load_workflow_json,
     patch_workflow,
+    patch_workflow_with_report,
 )
 
 
@@ -277,3 +278,71 @@ def test_controlnet_enabled_but_node_missing_in_workflow_raises_error() -> None:
         patch_workflow(workflow, mapping, params)
 
     assert "node id `10` not found" in str(exc.value)
+
+
+def test_auto_detect_mode_patches_high_confidence_fields() -> None:
+    workflow = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_unet.safetensors"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_clip.safetensors"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_vae.safetensors"}},
+        "4": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "old positive", "clip": ["2", 0]},
+        },
+        "5": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "old negative", "clip": ["2", 0]},
+        },
+        "6": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": 512, "height": 512, "batch_size": 1},
+        },
+        "7": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["4", 0],
+                "negative": ["5", 0],
+                "latent_image": ["6", 0],
+                "seed": 1,
+                "steps": 20,
+                "cfg": 7.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+            },
+        },
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["8", 0], "filename_prefix": "old_prefix"},
+        },
+    }
+    params = WorkflowPatchParams(
+        positive_prompt="new positive",
+        negative_prompt="new negative",
+        seed=2026,
+        width=1024,
+        height=1024,
+        steps=30,
+        cfg=6.5,
+        sampler="dpmpp_2m",
+        scheduler="karras",
+        filename_prefix="auto/item_001",
+    )
+    patched, report = patch_workflow_with_report(
+        workflow=workflow,
+        mapping=None,
+        params=params,
+        mapping_mode="auto_detect",
+    )
+    assert patched["4"]["inputs"]["text"] == "new positive"
+    assert patched["5"]["inputs"]["text"] == "new negative"
+    assert patched["6"]["inputs"]["width"] == 1024
+    assert patched["6"]["inputs"]["height"] == 1024
+    assert patched["7"]["inputs"]["seed"] == 2026
+    assert patched["7"]["inputs"]["steps"] == 30
+    assert patched["7"]["inputs"]["cfg"] == 6.5
+    assert patched["7"]["inputs"]["sampler_name"] == "dpmpp_2m"
+    assert patched["7"]["inputs"]["scheduler"] == "karras"
+    assert report["mapping_mode"] == "auto_detect"
+    assert "positive_prompt" in report["patched_fields"]

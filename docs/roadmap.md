@@ -1,199 +1,85 @@
 # Roadmap
 
-## Project Positioning
+## 项目定位
 
-This project aims to build a practical AIGC workflow for game-oriented asset generation, with a focus on:
+本项目面向游戏资产生成，目标是构建可复用、可追踪、可扩展的 AIGC 工作流，重点场景：
 
-- character concept generation
-- UI icon generation
-- stylized concept art generation
-- controllable diffusion workflows
-- small-scale data preparation and LoRA experiments
-- UE5-oriented downstream validation
-
-The project is designed as both an engineering workflow repository and a potential research exploration base.
+- 角色概念图
+- UI icon
+- 风格化概念图
+- 可控生成与后续资产可用性验证
 
 ---
 
-## Phase 1: Project Bootstrap
+## 阶段 1：工程骨架
 
-### Goals
-- initialize repository structure
-- define project scope
-- organize dependency files
-- write project documentation
-- prepare placeholder scripts and configs
+目标：
 
-### Tasks
-- complete README
-- complete roadmap / experiment log / resume notes
-- create configs, prompts, scripts, workflows, and src modules
-- define first-stage task boundaries
-- prepare development environment and basic coding conventions
-
-### Expected Outputs
-- a clean and structured repository
-- initial project documentation
-- reusable directory layout for future experiments
+- 完成仓库结构与基础文档
+- 建立配置、脚本、模块、测试的最小闭环
 
 ---
 
-## Phase 2: Baseline Workflow Setup
+## 阶段 2：基线工作流接入
 
-### Goals
-- build first runnable baseline workflows for game asset generation
-- organize prompt templates and task presets
-- support basic batch generation and output recording
+目标：
 
-### Tasks
-- prepare prompt templates for:
-  - UI icons
-  - character concepts
-  - stylized concept art
-- add baseline ComfyUI workflow json files
-- define config files for different generation tasks
-- add basic batch generation scripts
-- add result indexing logic
-
-### Expected Outputs
-- baseline prompt packs
-- baseline ComfyUI workflows
-- first batch of organized generation outputs
+- 建立 UI icon / character concept 基线
+- 接入 ComfyUI API workflow patch
+- 支持批量任务与结果记录
 
 ---
 
-## Phase 3: Data Preparation and Prompt Assets
+## 阶段 3：数据与提示词资产化
 
-### Goals
-- support small-scale image-text data organization
-- build reusable prompt and metadata assets
-- prepare for later LoRA experiments
+目标：
 
-### Tasks
-- organize raw image folders
-- clean filenames and metadata
-- build caption generation / cleanup scripts
-- define prompt templates with reusable fields
-- add dataset split utilities
-- build a small experiment-ready metadata table
-
-### Expected Outputs
-- cleaned small-scale dataset structure
-- reusable prompt templates
-- caption / metadata preparation pipeline
+- 组织小规模图文数据
+- 建立可复用 prompt 模板与 metadata
+- 为后续 LoRA 实验做准备
 
 ---
 
-## Phase 4: Controllable Generation
+## 阶段 4：可控生成扩展
 
-### Goals
-- improve generation controllability
-- introduce structure-aware preprocessing
-- compare guided and unguided generation behavior
+目标：
 
-### Tasks
-- add OpenCV preprocessing utilities
-- support edge map generation
-- support mask / simple structure guidance
-- connect preprocessing outputs to ControlNet workflows
-- compare baseline generation with guided generation
-- record qualitative observations for style and structure consistency
-
-### Expected Outputs
-- OpenCV preprocessing scripts
-- ControlNet-based workflow variants
-- comparison records for controllable generation
+- 引入结构条件与预处理
+- 对比有无控制条件下的质量与稳定性
 
 ---
 
-## Phase 5: Small-Scale LoRA Experiments
+## 阶段 5：轻量 LoRA 实验
 
-### Goals
-- explore lightweight fine-tuning for game visual styles
-- test style adaptation under limited data conditions
-- build a minimal fine-tuning and evaluation loop
+目标：
 
-### Tasks
-- define LoRA experiment configs
-- prepare training data subsets
-- run small-scale style adaptation experiments
-- record training settings and outputs
-- compare base model outputs with LoRA-enhanced outputs
-
-### Expected Outputs
-- initial LoRA experiment records
-- style adaptation observations
-- reusable fine-tuning configs
+- 小样本风格适配探索
+- 建立最小训练-验证-记录闭环
 
 ---
 
-## Phase 6: Evaluation and Result Organization
+## 阶段 6：评估与归档
 
-### Goals
-- make generated outputs easier to review and compare
-- summarize results from usability and consistency perspectives
-- support future resume writing and research exploration
+目标：
 
-### Tasks
-- add result parsing scripts
-- organize outputs by task / workflow / config
-- build simple qualitative evaluation records
-- compare results in terms of:
-  - style consistency
-  - icon readability
-  - concept usability
-  - workflow stability
-- build report-ready notes
-
-### Expected Outputs
-- organized experiment logs
-- structured result folders
-- evaluation summaries for iteration
+- 让输出可比较、可复盘
+- 支持参数/提示词迭代决策
 
 ---
 
-## Phase 7: UE5-Oriented Validation
+## 阶段 7：UE5 下游验证（后续）
 
-### Goals
-- verify whether generated assets are useful in downstream UE5 scenarios
-- connect generation workflow with practical asset usage
+目标：
 
-### Tasks
-- define UE5-side validation checklist
-- record whether generated images are usable as:
-  - concept references
-  - UI design references
-  - stylized visual direction references
-- collect screenshots and usage notes
-- summarize practical limitations and improvement directions
-
-### Expected Outputs
-- UE5 validation notes
-- screenshot-based usage records
-- downstream usability observations
+- 验证生成资产在 UE5 场景中的可用性
+- 输出下游限制与优化方向
 
 ---
 
-## Potential Research Extension
+## Current Priority（当前优先级）
 
-A possible research direction based on this repository is:
-
-**Style-consistent and controllable generation for game UI icons and concept art under small-data conditions**
-
-Possible focus points:
-- style consistency under limited data
-- prompt and reference-based controllability
-- structural guidance with preprocessing signals
-- workflow-level quality evaluation for practical content production
-
----
-
-## Current Priority
-
-The current priority is:
-
-1. replace placeholder workflows with real ComfyUI API exports
-2. align real node ids in node mapping YAML files
-3. run first SDXL baseline rounds for UI icons and character concepts
-4. record baseline prompts, seeds, samplers, schedulers, and image sizes
-5. start first controlled baseline comparison and prompt iteration
+1. replace placeholder workflows with real ComfyUI API exports  
+2. align real node ids in node mapping YAML files  
+3. run first SDXL baseline rounds for UI icons and character concepts  
+4. record baseline prompts, seeds, samplers, schedulers, and image sizes  
+5. start first controlled baseline comparison and prompt iteration  

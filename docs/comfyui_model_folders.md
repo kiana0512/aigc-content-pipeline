@@ -1,130 +1,120 @@
-# ComfyUI Model Folders
+# ComfyUI 模型目录说明
 
-This file summarizes ComfyUI model folder roles for this project.
+本文用于说明本项目里的 ComfyUI 模型目录分层与用途。
 
-`classic_checkpoint / split_model / conditioning / postprocess / media_extension`
-are project compatibility abstractions in this repository, not official ComfyUI terminology.
+说明：`classic_checkpoint / split_model / conditioning / postprocess / media_extension`  
+是项目内部兼容抽象，不是 ComfyUI 官方术语。
 
-## Classification
+## 1. 分层定义
 
-- current mainline: directly relevant to current baseline delivery
-- common extension: often needed in next-stage workflows
-- advanced optional: specialized/internal/infra-oriented folders
+- 当前主线：当前阶段高频且直接相关目录
+- 常用扩展：下一阶段常见扩展目录
+- 高级可选：特定工作流或高级场景使用
 
-## 1) Current Mainline
+## 2. 当前主线目录
 
 ### `checkpoints`
-- class: current mainline
-- typical use: classic SD/SDXL workflows (single checkpoint loader)
-- game AIGC relevance: baseline icon/concept generation
+- 用途：checkpoint 一体模型（常见 SDXL）
+- 游戏资产流价值：UI icon / concept 基线快速落地
+- 当前状态：主线支持（已实现）
 
 ### `diffusion_models`
-- class: current mainline compatibility target
-- typical use: split-model families (with separate text encoder and vae)
-- game AIGC relevance: future Qwen / FLUX / Hunyuan-like split workflows
+- 用途：split-model 家族中的扩散主干
+- 游戏资产流价值：支持 Qwen/FLUX 等分体模型链路
+- 当前状态：兼容支持（已实现目录表达 + 检查）
 
 ### `text_encoders`
-- class: current mainline compatibility target
-- typical use: prompt encoding for split-model workflows
-- game AIGC relevance: future multi-family expansion beyond checkpoint-only design
+- 用途：split-model 文本编码器
+- 游戏资产流价值：分体模型提示词理解核心组件
+- 当前状态：兼容支持（已实现目录表达 + 检查）
 
 ### `vae`
-- class: current mainline
-- typical use: latent <-> pixel decode/encode components
-- game AIGC relevance: baseline and split-model workflows
+- 用途：latent 与像素空间转换
+- 游戏资产流价值：checkpoint 与 split-model 都需要
+- 当前状态：主线支持（已实现）
 
-## 2) Common Extension
+## 3. 常用扩展目录
 
 ### `loras`
-- class: common extension
-- use: style/identity lightweight adaptation
-- repo status: interface-ready, not full pipeline
+- 用途：轻量风格/角色适配
+- 当前状态：接口预留（默认关闭）
 
 ### `controlnet`
-- class: common extension
-- use: structure/control conditioning
-- repo status: interface-ready, baseline disabled
+- 用途：结构控制
+- 当前状态：接口预留（默认关闭）
+- 注意：必须与底模架构匹配（如 SDXL ControlNet 不能乱配 SD1.5）
 
 ### `embeddings`
-- class: common extension
-- use: textual inversion / embedding tokens
+- 用途：文本反演向量
+- 当前状态：兼容支持
 
 ### `clip_vision`
-- class: common extension
-- use: image/reference-side conditioning
+- 用途：图像条件编码（参考图/风格参考）
+- 当前状态：兼容支持
 
 ### `style_models`
-- class: common extension
-- use: style transfer / style-conditioned generation chains
+- 用途：风格控制链路
+- 当前状态：兼容预留
 
 ### `upscale_models`
-- class: common extension
-- use: pixel-space upscale/postprocess
+- 用途：像素空间放大
+- 当前状态：兼容预留
 
 ### `latent_upscale_models`
-- class: common extension
-- use: latent-space upscale chains
+- 用途：潜空间放大
+- 当前状态：兼容预留
 
 ### `photomaker`
-- class: common extension
-- use: identity/reference-driven generation workflows
+- 用途：身份/参考风格增强
+- 当前状态：兼容预留
 
 ### `gligen`
-- class: common extension
-- use: grounding/layout/region-aware conditioning families
+- 用途：区域/布局类条件控制
+- 当前状态：兼容预留
 
 ### `hypernetworks`
-- class: common extension
-- use: additional style/adaptation model components
+- 用途：附加风格网络
+- 当前状态：兼容预留
 
 ### `audio_encoders`
-- class: common extension
-- use: audio-conditioned workflows
-- game AIGC relevance: potential voice/audio-driven media asset pipeline
+- 用途：音频条件工作流
+- 当前状态：兼容预留
 
-## 3) Advanced Optional
+## 4. 高级可选目录
 
 ### `diffusers`
-- class: advanced optional
-- note: often environment/toolchain specific layout
+- 用途：工具链/布局相关目录
+- 当前状态：高级可选
 
 ### `vae_approx`
-- class: advanced optional
-- note: optimization/specialized approximate vae components
+- 用途：近似 VAE 组件
+- 当前状态：高级可选
 
 ### `classifiers`
-- class: advanced optional
-- note: workflow-specific or legacy guidance components
+- 用途：特定条件引导或历史链路
+- 当前状态：高级可选
 
 ### `model_patches`
-- class: advanced optional
-- note: patch overlays / internal model customization
+- 用途：模型 patch/覆写
+- 当前状态：高级可选
 
 ### `download_model_base`
-- class: advanced optional
-- note: infrastructure/download-base oriented directory
+- 用途：下载基础目录
+- 当前状态：高级可选
 
-## Layered Adoption Recommendation
+## 5. 任务-目录矩阵
 
-1. first stage (now):
-   - `checkpoints`, `vae`, baseline image workflows
-2. second stage:
-   - `loras`, `controlnet`, `embeddings`, `upscale_models`
-3. third stage:
-   - split-model adoption: `diffusion_models` + `text_encoders` + `vae`
-4. fourth stage:
-   - specialized extensions: `clip_vision`, `style_models`, `photomaker`, `audio_encoders`, etc.
-5. advanced optional:
-   - only when workflow/tooling explicitly requires them
-
-This staged approach keeps baseline stable while preserving forward compatibility.
-
-## Task-Folder Matrix
-
-| Workflow Task | Typical Family (Project Abstraction) | Core Folders | Extended Folders |
+| 任务 | 典型 family（项目抽象） | 核心目录 | 扩展目录 |
 | --- | --- | --- | --- |
-| SDXL baseline image generation | `classic_checkpoint` | `checkpoints`, `vae` | `loras`, `controlnet`, `embeddings` |
-| Split-model baseline (Qwen/FLUX-style) | `split_model` | `diffusion_models`, `text_encoders`, `vae` | `clip_vision`, `loras`, `controlnet` |
-| Style/reference conditioning | `conditioning` | (depends on base family) | `clip_vision`, `style_models`, `photomaker`, `gligen`, `hypernetworks` |
-| Upscale/postprocess | `postprocess` | (depends on base family) | `upscale_models`, `latent_upscale_models` |
-| Audio/video extension preparation | `media_extension` | (depends on base family) | `audio_encoders` (+ workflow-specific video stacks) |
+| SDXL baseline 图片生成 | `classic_checkpoint` | `checkpoints`, `vae` | `loras`, `controlnet`, `embeddings` |
+| split-model baseline（Qwen/FLUX） | `split_model` | `diffusion_models`, `text_encoders`, `vae` | `clip_vision`, `loras`, `controlnet` |
+| 风格参考/条件控制 | `conditioning` | 依赖基础 family | `clip_vision`, `style_models`, `photomaker`, `gligen`, `hypernetworks` |
+| 放大与后处理 | `postprocess` | 依赖基础 family | `upscale_models`, `latent_upscale_models` |
+| 音视频扩展准备 | `media_extension` | 依赖基础 family | `audio_encoders` + 相关视频模型目录 |
+
+## 6. 分层推进建议
+
+1. 先跑通 SDXL baseline（当前主线）
+2. 再引入 split-model baseline
+3. 再做 LoRA / ControlNet
+4. 最后扩展放大、音视频、复杂条件链
