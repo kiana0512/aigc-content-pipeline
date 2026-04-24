@@ -9,6 +9,11 @@
 - 批量提交到 ComfyUI `/prompt`
 - 产出每个 item 的 patch 报告与提交结果
 
+## Prompt 覆盖规则（重要）
+- 原始 workflow JSON 里的 prompt 只是模板默认示例。
+- 运行时如果提供 prompt pack，最终 prompt 以 prompt pack 为准。
+- 一句话：原始 JSON 决定怎么生成，CSV 决定生成什么。
+
 ## 目录（已精简）
 - `configs/`：两套可运行配置 + 对应 node map
 - `workflows/comfyui/`：两份真实 API workflow
@@ -27,6 +32,11 @@ python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml -
 2. 批量 submit 到 ComfyUI
 ```powershell
 python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --prompt-pack examples/prompt_packs/z_image_turbo_prompt_pack.csv --mode submit --run-name z_image_turbo_batch_test
+```
+
+3. 从 workflow 默认 prompt 导出一行 prompt pack（可选）
+```powershell
+python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --mode export_default_prompt_pack
 ```
 
 ## 关键输出

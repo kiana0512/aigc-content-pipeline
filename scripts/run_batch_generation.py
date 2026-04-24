@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime
 import json
 import re
@@ -77,6 +78,7 @@ def parse_args() -> argparse.Namespace:
             "suggest_mapping",
             "auto_patch_workflow",
             "workflow_import_pipeline",
+            "export_default_prompt_pack",
         ],
         default="manifest",
         help="Run mode.",
@@ -331,6 +333,59 @@ def _resolve_manifest_output_path(args: argparse.Namespace, run_dir: Path) -> Pa
     return run_dir / "run_manifest.json"
 
 
+def _shorten_text(value: str, limit: int = 140) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _print_prompt_override_context(
+    *,
+    stage: str,
+    workflow_path: Path | str | None,
+    manifest: dict[str, Any],
+) -> None:
+    workflow_path_text = str(workflow_path or manifest.get("workflow_path", "")).strip()
+    if workflow_path_text:
+        print(f"[INFO] {stage}: source workflow path: {workflow_path_text}")
+
+    workflow_default_positive = str(manifest.get("workflow_default_positive_prompt", "")).strip()
+    if workflow_default_positive:
+        print(
+            "[INFO] {stage}: workflow default positive prompt text: \"{text}\"".format(
+                stage=stage,
+                text=_shorten_text(workflow_default_positive),
+            )
+        )
+    else:
+        print(f"[INFO] {stage}: workflow default positive prompt text: <empty or unmapped>")
+
+    print("[INFO] prompt pack values override workflow default prompt text")
+
+    items = manifest.get("items", [])
+    for item in items:
+        item_index = int(item.get("item_index", 0) or 0)
+        positive_prompt = str(
+            item.get("final_positive_prompt", item.get("positive_prompt", ""))
+        ).strip()
+        negative_prompt = str(item.get("negative_prompt", "")).strip()
+        print(
+            "[INFO] {stage}: item {idx} final positive_prompt=\"{pos}\"".format(
+                stage=stage,
+                idx=item_index,
+                pos=_shorten_text(positive_prompt),
+            )
+        )
+        print(
+            "[INFO] {stage}: item {idx} final negative_prompt=\"{neg}\"".format(
+                stage=stage,
+                idx=item_index,
+                neg=_shorten_text(negative_prompt),
+            )
+        )
+
+
 def _render_patch_report_markdown(
     item: dict[str, Any],
     report: dict[str, Any],
@@ -392,6 +447,29 @@ def _render_patch_report_markdown(
     else:
         lines.append("- None")
 
+    lines.append("")
+    lines.append("## Prompt Override")
+    lines.append(
+        "- Workflow default prompt: `{}`".format(
+            report.get("workflow_default_prompt", "")
+        )
+    )
+    lines.append(
+        "- Final patched prompt: `{}`".format(
+            report.get("final_patched_prompt", "")
+        )
+    )
+    lines.append(
+        "- Override source: `{}`".format(
+            report.get("prompt_override_source", "unknown")
+        )
+    )
+    lines.append(
+        "- prompt_override_applied: `{}`".format(
+            bool(report.get("prompt_override_applied", False))
+        )
+    )
+
     custom_notes = report.get("custom_node_notes", [])
     lines.append("")
     lines.append("## Custom Node Notes")
@@ -432,7 +510,10 @@ def _render_batch_patch_report_markdown(
                     f"status=`{status}`, filename_prefix=`{item.get('filename_prefix', '')}`"
                 )
             )
-            lines.append(f"  prompt: `{item.get('positive_prompt', '')}`")
+            lines.append(f"  workflow_default_prompt: `{item.get('workflow_default_positive_prompt', '')}`")
+            lines.append(f"  final_patched_prompt: `{item.get('final_positive_prompt', item.get('positive_prompt', ''))}`")
+            lines.append(f"  override_source: `{item.get('prompt_override_source', 'unknown')}`")
+            lines.append(f"  prompt_override_applied: `{bool(item.get('prompt_override_applied', False))}`")
             lines.append(
                 f"  patched_workflow_path: `{item.get('patched_workflow_path', '') or 'N/A'}`"
             )
@@ -545,6 +626,12 @@ def _build_manifest_if_needed(
     save_manifest_json(manifest, output_path)
     print(f"[OK] Run manifest created: {output_path}")
     print(f"[OK] Number of generation items: {len(manifest['items'])}")
+    if args.mode == "submit":
+        _print_prompt_override_context(
+            stage="submit",
+            workflow_path=workflow_path_text,
+            manifest=manifest,
+        )
     return manifest
 
 
@@ -608,6 +695,55 @@ def run_suggest_mapping(args: argparse.Namespace, config: dict[str, Any]) -> Non
     print(f"[OK] Manual review YAML: {output_manual_review}")
 
 
+def run_export_default_prompt_pack(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    workflow_path = _resolve_workflow_path(args, config)
+    mapping_path = _resolve_mapping_path(args, config, required=False)
+    mapping = _load_optional_mapping(mapping_path)
+    workflow = load_workflow_json(workflow_path)
+    defaults = _extract_workflow_defaults(workflow=workflow, mapping=mapping)
+
+    generation_cfg = config.get("generation", {}) or {}
+    positive_prompt = str(defaults.get("positive_prompt", "")).strip() or str(
+        generation_cfg.get("prompt", "")
+    ).strip()
+    negative_prompt = str(defaults.get("negative_prompt", "")).strip() or str(
+        generation_cfg.get("negative_prompt", "")
+    ).strip()
+    filename_prefix = str(generation_cfg.get("filename_prefix", "")).strip()
+
+    base_stem = sanitize_filename(Path(args.config).stem) or sanitize_filename(workflow_path.stem)
+    if base_stem.endswith("_api"):
+        base_stem = base_stem[:-4]
+    if base_stem.startswith("image_"):
+        base_stem = base_stem[len("image_") :]
+    base_stem = base_stem or "workflow"
+
+    output_path = Path("examples") / "prompt_packs" / f"{base_stem}_default_from_workflow.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["id", "positive_prompt", "negative_prompt", "filename_prefix"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "id": "1",
+                "positive_prompt": positive_prompt,
+                "negative_prompt": negative_prompt,
+                "filename_prefix": filename_prefix,
+            }
+        )
+
+    print(f"[INFO] source workflow path: {workflow_path.as_posix()}")
+    print(
+        '[INFO] workflow default positive prompt text: "{}"'.format(
+            _shorten_text(str(defaults.get("positive_prompt", "")).strip())
+        )
+    )
+    print(f"[OK] Exported default prompt pack: {output_path.as_posix()}")
+
+
 def run_workflow_import_pipeline(args: argparse.Namespace, config: dict[str, Any]) -> None:
     workflow_path = _resolve_workflow_path(args, config)
     run_dir = _resolve_run_dir(args=args, config=config, workflow_path=workflow_path)
@@ -650,6 +786,11 @@ def run_workflow_import_pipeline(args: argparse.Namespace, config: dict[str, Any
     )
     manifest["run_name"] = run_dir.name
     save_manifest_json(manifest, run_dir / "run_manifest.json")
+    _print_prompt_override_context(
+        stage="workflow_import_pipeline",
+        workflow_path=workflow_path,
+        manifest=manifest,
+    )
 
     _patch_workflows_common(
         args=args,
@@ -773,6 +914,13 @@ def _resolve_manifest_items(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             item["seed"] = int(manifest.get("seed", 42))
         item.setdefault("seed_source", "config.runtime.seed")
+        item.setdefault("final_positive_prompt", str(item.get("positive_prompt", "")).strip())
+        item.setdefault(
+            "workflow_default_positive_prompt",
+            str(manifest.get("workflow_default_positive_prompt", "")).strip(),
+        )
+        item.setdefault("prompt_override_source", "unknown")
+        item.setdefault("prompt_override_applied", False)
         item.setdefault("patched_workflow_path", "")
         item.setdefault("patch_report_path", "")
         item.setdefault("patch_status", "pending")
@@ -1069,6 +1217,17 @@ def _patch_workflows_common(
     base_workflow = load_workflow_json(workflow_path)
 
     for index, item in enumerate(items, start=1):
+        item["final_positive_prompt"] = str(
+            item.get("final_positive_prompt", item.get("positive_prompt", ""))
+        ).strip()
+        item["workflow_default_positive_prompt"] = str(
+            item.get(
+                "workflow_default_positive_prompt",
+                manifest.get("workflow_default_positive_prompt", ""),
+            )
+        ).strip()
+        if str(item.get("prompt_override_source", "")).strip() == "":
+            item["prompt_override_source"] = "unknown"
         params = _build_patch_params(manifest, item, index, comfy_settings)
         item["filename_prefix"] = params.filename_prefix
         if not str(item.get("filename_prefix_source", "")).strip():
@@ -1093,6 +1252,16 @@ def _patch_workflows_common(
             patch_report["unsupported_fields"] = _build_unsupported_fields(
                 mapping=mapping,
                 params=params,
+            )
+            patch_report["workflow_default_prompt"] = item.get(
+                "workflow_default_positive_prompt", ""
+            )
+            patch_report["final_patched_prompt"] = item.get("final_positive_prompt", "")
+            patch_report["prompt_override_source"] = item.get(
+                "prompt_override_source", "unknown"
+            )
+            patch_report["prompt_override_applied"] = bool(
+                item.get("prompt_override_applied", False)
             )
 
             save_workflow_json(patched_workflow, output_path)
@@ -1125,6 +1294,12 @@ def _patch_workflows_common(
                 "patch_status": item.get("patch_status", "unknown"),
                 "patch_error": item.get("patch_error", ""),
                 "filename_prefix": item.get("filename_prefix", ""),
+                "final_positive_prompt": item.get("final_positive_prompt", ""),
+                "workflow_default_positive_prompt": item.get(
+                    "workflow_default_positive_prompt", ""
+                ),
+                "prompt_override_source": item.get("prompt_override_source", "unknown"),
+                "prompt_override_applied": bool(item.get("prompt_override_applied", False)),
             }
         )
 
@@ -1251,6 +1426,9 @@ def main() -> None:
 
         if args.mode == "suggest_mapping":
             run_suggest_mapping(args, config)
+            return
+        if args.mode == "export_default_prompt_pack":
+            run_export_default_prompt_pack(args, config)
             return
         if args.mode == "workflow_import_pipeline":
             run_workflow_import_pipeline(args, config)

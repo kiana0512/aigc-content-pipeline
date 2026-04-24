@@ -15,12 +15,20 @@ python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml -
 python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --prompt-pack examples/prompt_packs/z_image_turbo_prompt_pack.csv --mode submit --run-name z_image_turbo_batch_test
 ```
 
+### 2.3 导出 workflow 默认 prompt 为一行 CSV（可选）
+```powershell
+python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --mode export_default_prompt_pack
+```
+
 ## 3. 关键行为
 - `workflow_import_pipeline` 会为每个 item 生成独立文件：
   - `patched_workflows/item_0001_patched_workflow.json`
   - `patch_reports/item_0001_patch_report.json`
 - `submit` 会按 item 全量提交，不会只提交第一条。
 - 当 `manifest` 是多条但仅有单个 legacy `patched_workflow.json` 时，程序会告警并报错。
+- 原始 workflow JSON 里的 prompt 只是模板默认示例。
+- 运行时如果提供 prompt pack，最终 prompt 以 prompt pack 为准。
+- 原始 JSON 决定怎么生成，CSV 决定生成什么。
 
 ## 4. 参数来源规则（简化）
 - `positive_prompt` / `negative_prompt`：优先 CSV，其次 config/workflow fallback

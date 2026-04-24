@@ -88,6 +88,8 @@ def build_run_manifest(
         "config_path": str(config_path).strip(),
         "prompt_pack_path": str(prompt_pack_path).strip(),
         "workflow_path": str(workflow_path).strip(),
+        "workflow_default_positive_prompt": str(defaults.get("positive_prompt", "")).strip(),
+        "workflow_default_negative_prompt": str(defaults.get("negative_prompt", "")).strip(),
         "project_name": project_cfg.get("name", "unknown_project"),
         "task_type": task_cfg.get("type", "unknown_task"),
         "asset_type": task_cfg.get("asset_type", "unknown_asset"),
@@ -176,6 +178,13 @@ def build_run_manifest(
             except ValueError:
                 item_seed_source = "config.runtime.seed(fallback_from_invalid_prompt_pack.seed)"
 
+        prompt_override_source = _resolve_prompt_override_source(positive_source)
+        prompt_override_applied = bool(
+            workflow_default_positive
+            and prompt_override_source in {"prompt_pack", "config"}
+            and positive_prompt != workflow_default_positive
+        )
+
         manifest["items"].append(
             {
                 "id": item_id,
@@ -197,10 +206,25 @@ def build_run_manifest(
                 "seed_source": item_seed_source,
                 "lora_name": str(row.get("lora_name", "")).strip(),
                 "lora_strength_model": str(row.get("lora_strength_model", "")).strip(),
+                "workflow_default_positive_prompt": workflow_default_positive,
+                "final_positive_prompt": positive_prompt,
+                "prompt_override_source": prompt_override_source,
+                "prompt_override_applied": prompt_override_applied,
                 "patched_workflow_path": "",
                 "patch_report_path": "",
             }
         )
+
+    if manifest["items"]:
+        manifest["final_positive_prompt"] = str(
+            manifest["items"][0].get("final_positive_prompt", "")
+        )
+        manifest["prompt_override_applied"] = bool(
+            any(bool(item.get("prompt_override_applied", False)) for item in manifest["items"])
+        )
+    else:
+        manifest["final_positive_prompt"] = ""
+        manifest["prompt_override_applied"] = False
 
     return manifest
 
@@ -576,3 +600,14 @@ def _compose_prompt_from_parts(subject: str, style: str, attributes: str) -> str
     parts = [subject.strip(), style.strip(), attributes.strip()]
     non_empty = [part for part in parts if part]
     return ", ".join(non_empty)
+
+
+def _resolve_prompt_override_source(source: str) -> str:
+    value = str(source).strip()
+    if value.startswith("prompt_pack."):
+        return "prompt_pack"
+    if value.startswith("config."):
+        return "config"
+    if value.startswith("workflow_default."):
+        return "workflow_default"
+    return "unknown"
