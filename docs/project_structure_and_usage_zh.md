@@ -51,3 +51,28 @@ python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml -
 - 正向：`positive_prompt_text` / `prompt` / `prompt_text` / `text`
 - 负向：`negative_prompt_text` / `neg_prompt` / `negative` / `negative_text`
 - 文件名前缀：`output_prefix` / `file_prefix`
+
+## 6. 接入一个新的 ComfyUI API workflow
+1. 把 JSON 放入 `workflows/comfyui/`
+2. 执行 scaffold 自动生成配置与样例
+```powershell
+python scripts/run_batch_generation.py --mode scaffold_workflow --workflow-json workflows/comfyui/my_new_workflow_api.json --slug my_new_workflow
+```
+3. 检查生成文件
+- `configs/my_new_workflow_api.yaml`
+- `configs/node_maps/my_new_workflow_node_map.yaml`
+- `examples/prompt_packs/my_new_workflow_default_from_workflow.csv`
+- `examples/prompt_packs/my_new_workflow_prompt_pack.csv`
+- `results/runs/scaffold_my_new_workflow/scaffold_report.md`
+
+4. 使用 `default_from_workflow.csv` 跑默认图
+```powershell
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode workflow_import_pipeline --run-name my_new_workflow_default_round1
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode submit --run-name my_new_workflow_default_round1
+```
+
+5. 使用 `prompt_pack.csv` 做自定义批量生成
+```powershell
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_prompt_pack.csv --mode workflow_import_pipeline --run-name my_new_workflow_round1
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_prompt_pack.csv --mode submit --run-name my_new_workflow_round1
+```

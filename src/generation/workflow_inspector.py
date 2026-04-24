@@ -18,8 +18,10 @@ KNOWN_NODE_TYPES = {
     "UNETLoader",
     "CLIPTextEncode",
     "KSampler",
+    "KSamplerAdvanced",
     "EmptyLatentImage",
     "EmptySD3LatentImage",
+    "EmptyImage",
     "LoraLoader",
     "LoraLoaderModelOnly",
     "ControlNetLoader",
@@ -39,8 +41,8 @@ LOADER_MODEL_KEYS: dict[str, dict[str, str]] = {
     "ControlNetLoader": {"controlnet": "control_net_name"},
 }
 
-LATENT_NODE_TYPES = {"EmptyLatentImage", "EmptySD3LatentImage"}
-SAMPLER_NODE_TYPES = {"KSampler"}
+LATENT_NODE_TYPES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyImage"}
+SAMPLER_NODE_TYPES = {"KSampler", "KSamplerAdvanced"}
 PROMPT_NODE_TYPES = {"CLIPTextEncode"}
 OUTPUT_NODE_TYPES = {"SaveImage"}
 LOADER_NODE_TYPES = set(LOADER_MODEL_KEYS.keys()) | {"LoadImage"}
@@ -329,20 +331,21 @@ def _detect_sampler_nodes(prompt_graph: dict[str, Any]) -> list[dict[str, Any]]:
         if class_type not in SAMPLER_NODE_TYPES:
             continue
         inputs = node.get("inputs", {})
-        sampler_key = "sampler_name" if "sampler_name" in inputs else "sampler"
+        seed_key = "seed" if "seed" in inputs else ("noise_seed" if "noise_seed" in inputs else "")
+        sampler_key = "sampler_name" if "sampler_name" in inputs else ("sampler" if "sampler" in inputs else "")
         scheduler_key = "scheduler" if "scheduler" in inputs else ""
         out.append(
             {
                 "node_id": str(node_id),
                 "class_type": class_type,
-                "seed_key": "seed" if "seed" in inputs else "",
+                "seed_key": seed_key,
                 "steps_key": "steps" if "steps" in inputs else "",
                 "cfg_key": "cfg" if "cfg" in inputs else "",
                 "sampler_key": sampler_key if sampler_key in inputs else "",
                 "scheduler_key": scheduler_key if scheduler_key in inputs else "",
                 "denoise_key": "denoise" if "denoise" in inputs else "",
                 "values": {
-                    "seed": inputs.get("seed"),
+                    "seed": inputs.get(seed_key) if seed_key else None,
                     "steps": inputs.get("steps"),
                     "cfg": inputs.get("cfg"),
                     "sampler": inputs.get(sampler_key),

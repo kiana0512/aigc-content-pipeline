@@ -44,3 +44,28 @@ python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml -
   - `submitted_items`
   - `failed_items`
   - `results[]`
+
+## 6. 接入一个新的 ComfyUI API workflow
+1. 把新的 API workflow JSON 放到 `workflows/comfyui/`
+
+2. 运行 scaffold（自动生成 config/node_map/prompt_pack/report）
+```powershell
+python scripts/run_batch_generation.py --mode scaffold_workflow --workflow-json workflows/comfyui/my_new_workflow_api.json --slug my_new_workflow
+```
+
+3. 先用默认 prompt 复现 workflow 导出图
+```powershell
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode workflow_import_pipeline --run-name my_new_workflow_default_round1
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode submit --run-name my_new_workflow_default_round1
+```
+
+4. 再用可编辑 prompt pack 做批量生成
+```powershell
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_prompt_pack.csv --mode workflow_import_pipeline --run-name my_new_workflow_round1
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_prompt_pack.csv --mode submit --run-name my_new_workflow_round1
+```
+
+可选参数：
+- `--force`：覆盖已有 scaffold 文件
+- `--validate`：生成后自动跑一次 pipeline 验证
+- `--submit-after-validate`：验证后自动 submit

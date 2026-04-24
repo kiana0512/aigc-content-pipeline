@@ -5,11 +5,13 @@ import csv
 from datetime import datetime
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 import requests
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -26,12 +28,15 @@ from src.generation.comfyui_adapter import (  # noqa: E402
 )
 from src.generation.comfyui_client import ComfyUIClient  # noqa: E402
 from src.generation.mapping_suggester import (  # noqa: E402
+    suggest_node_mapping,
     save_mapping_diff_markdown,
     save_mapping_manual_review_yaml,
     save_mapping_yaml,
 )
 from src.generation.prompt_builder import sanitize_filename  # noqa: E402
 from src.generation.workflow_inspector import (  # noqa: E402
+    detect_workflow_format,
+    load_workflow_payload,
     inspect_workflow_path,
     save_inspection_report_json,
     save_inspection_report_markdown,
@@ -53,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Workflow-first batch entrypoint for ComfyUI API workflow operations."
     )
-    parser.add_argument("--config", type=str, required=True, help="YAML config path.")
+    parser.add_argument("--config", type=str, default="", help="YAML config path.")
     parser.add_argument(
         "--prompt-pack",
         type=str,
@@ -79,6 +84,9 @@ def parse_args() -> argparse.Namespace:
             "auto_patch_workflow",
             "workflow_import_pipeline",
             "export_default_prompt_pack",
+            "scaffold_workflow",
+            "import_workflow_scaffold",
+            "prepare_workflow_scaffold",
         ],
         default="manifest",
         help="Run mode.",
@@ -126,6 +134,27 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional run name override.",
     )
+    parser.add_argument(
+        "--slug",
+        type=str,
+        default="",
+        help="Optional scaffold slug. Defaults to inferred slug from workflow JSON file name.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing scaffold target files (with backup).",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run workflow_import_pipeline once after scaffold generation.",
+    )
+    parser.add_argument(
+        "--submit-after-validate",
+        action="store_true",
+        help="If set with --validate, run submit after validation pipeline.",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +163,59 @@ def _resolve_required_path(cli_value: str, config_value: str, label: str) -> Pat
     if not value:
         raise ValueError(f"{label} is required for this mode.")
     return Path(value)
+
+
+def _normalize_mode_alias(mode: str) -> str:
+    value = str(mode).strip().lower()
+    aliases = {
+        "import_workflow_scaffold": "scaffold_workflow",
+        "prepare_workflow_scaffold": "scaffold_workflow",
+    }
+    return aliases.get(value, value)
+
+
+def _mode_requires_config(mode: str) -> bool:
+    return mode in {
+        "manifest",
+        "patch_workflow",
+        "submit",
+        "inspect_workflow",
+        "resolve_models",
+        "suggest_mapping",
+        "auto_patch_workflow",
+        "workflow_import_pipeline",
+        "export_default_prompt_pack",
+    }
+
+
+def _require_config_path_for_mode(args: argparse.Namespace) -> Path:
+    config_path_text = str(args.config or "").strip()
+    if not config_path_text:
+        raise ValueError(f"--config is required for mode `{args.mode}`.")
+    return Path(config_path_text)
+
+
+def _to_snake_slug(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    lowered = re.sub(r"[^a-z0-9_]+", "_", lowered)
+    lowered = re.sub(r"_+", "_", lowered).strip("_")
+    return lowered
+
+
+def _infer_scaffold_slug(workflow_path: Path, provided_slug: str) -> str:
+    if str(provided_slug or "").strip():
+        slug = _to_snake_slug(provided_slug)
+        if not slug:
+            raise ValueError("--slug resolved to empty value; please provide a valid slug.")
+        return slug
+
+    stem = workflow_path.stem
+    if stem.endswith("_api"):
+        stem = stem[:-4]
+    slug = _to_snake_slug(stem)
+    if not slug:
+        raise ValueError("Failed to infer slug from workflow file name.")
+    return slug
 
 
 def _build_item_prefix(item: dict[str, Any], index: int) -> str:
@@ -384,6 +466,317 @@ def _print_prompt_override_context(
                 neg=_shorten_text(negative_prompt),
             )
         )
+
+
+def _collect_detected_lora_nodes(inspection: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for node in inspection.get("detected_loader_nodes", []):
+        class_type = str(node.get("class_type", ""))
+        if class_type in {"LoraLoader", "LoraLoaderModelOnly"}:
+            out.append(node)
+    return out
+
+
+def _collect_detected_model_loaders(inspection: dict[str, Any]) -> list[dict[str, Any]]:
+    allowed = {
+        "UNETLoader",
+        "CheckpointLoaderSimple",
+        "CLIPLoader",
+        "DualCLIPLoader",
+        "VAELoader",
+    }
+    out: list[dict[str, Any]] = []
+    for node in inspection.get("detected_loader_nodes", []):
+        class_type = str(node.get("class_type", ""))
+        if class_type in allowed:
+            out.append(node)
+    return out
+
+
+def _extract_latent_defaults(inspection: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    latent_nodes = inspection.get("detected_latent_nodes", [])
+    fallback: list[str] = []
+    if latent_nodes:
+        chosen = latent_nodes[0]
+        width = chosen.get("width")
+        height = chosen.get("height")
+        batch_size = chosen.get("batch_size")
+    else:
+        chosen = {}
+        width = None
+        height = None
+        batch_size = None
+
+    if not isinstance(width, int):
+        width = 1024
+        fallback.append("generation.width")
+    if not isinstance(height, int):
+        height = 1024
+        fallback.append("generation.height")
+    if not isinstance(batch_size, int):
+        batch_size = 1
+        fallback.append("generation.batch_size")
+    return {
+        "width": int(width),
+        "height": int(height),
+        "batch_size": int(batch_size),
+        "node_id": str(chosen.get("node_id", "")),
+    }, fallback
+
+
+def _extract_sampler_defaults(inspection: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    sampler_nodes = inspection.get("detected_sampler_nodes", [])
+    fallback: list[str] = []
+    values: dict[str, Any] = {}
+    if sampler_nodes:
+        values = sampler_nodes[0].get("values", {}) or {}
+    seed = values.get("seed")
+    steps = values.get("steps")
+    cfg = values.get("cfg")
+    sampler_name = values.get("sampler")
+    scheduler = values.get("scheduler")
+    denoise = values.get("denoise")
+
+    if not isinstance(seed, int):
+        seed = 42
+        fallback.append("runtime.seed")
+    if not isinstance(steps, int):
+        steps = 30
+        fallback.append("generation.num_inference_steps")
+    if not isinstance(cfg, (int, float)):
+        cfg = 7.0
+        fallback.append("generation.guidance_scale")
+    if not isinstance(sampler_name, str) or not sampler_name.strip():
+        sampler_name = "euler"
+        fallback.append("generation.sampler")
+    if not isinstance(scheduler, str) or not scheduler.strip():
+        scheduler = "normal"
+        fallback.append("generation.scheduler")
+    if not isinstance(denoise, (int, float)):
+        denoise = 1.0
+        fallback.append("generation.denoise")
+
+    return {
+        "seed": int(seed),
+        "steps": int(steps),
+        "cfg": float(cfg),
+        "sampler": str(sampler_name),
+        "scheduler": str(scheduler),
+        "denoise": float(denoise),
+    }, fallback
+
+
+def _extract_filename_prefix_default(
+    inspection: dict[str, Any], slug: str
+) -> tuple[str, list[str]]:
+    output_nodes = inspection.get("detected_output_nodes", [])
+    fallback: list[str] = []
+    if output_nodes:
+        value = str(output_nodes[0].get("filename_prefix", "")).strip()
+        if value:
+            return value, fallback
+    fallback.append("generation.filename_prefix")
+    return slug, fallback
+
+
+def _extract_lora_defaults(
+    *,
+    inspection: dict[str, Any],
+    workflow: dict[str, Any],
+) -> dict[str, Any] | None:
+    prompt_graph = _extract_prompt_graph(workflow)
+    for node in _collect_detected_lora_nodes(inspection):
+        node_id = str(node.get("node_id", "")).strip()
+        if not node_id:
+            continue
+        raw = prompt_graph.get(node_id, {})
+        if not isinstance(raw, dict):
+            continue
+        inputs = raw.get("inputs", {})
+        if not isinstance(inputs, dict):
+            continue
+        lora_name = str(inputs.get("lora_name", "")).strip()
+        strength_model = inputs.get("strength_model", inputs.get("strength", 1.0))
+        strength_clip = inputs.get("strength_clip")
+        payload: dict[str, Any] = {
+            "enabled": True,
+            "path": lora_name,
+            "strength": float(strength_model) if isinstance(strength_model, (int, float)) else 1.0,
+            "strength_model": (
+                float(strength_model) if isinstance(strength_model, (int, float)) else 1.0
+            ),
+        }
+        if isinstance(strength_clip, (int, float)):
+            payload["strength_clip"] = float(strength_clip)
+        return payload
+    return None
+
+
+def _infer_model_family_for_scaffold(inspection: dict[str, Any]) -> str:
+    loader_nodes = inspection.get("detected_loader_nodes", [])
+    class_types = {str(item.get("class_type", "")) for item in loader_nodes}
+    if any("Upscale" in class_type for class_type in class_types):
+        return "postprocess"
+    if "ControlNetLoader" in class_types:
+        return "conditioning"
+    if {"UNETLoader", "CLIPLoader", "VAELoader"}.intersection(class_types):
+        return "split_model"
+    if "CheckpointLoaderSimple" in class_types:
+        return "classic_checkpoint"
+    return str(inspection.get("suggested_model_family", "classic_checkpoint"))
+
+
+def _write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _render_scaffold_report_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Scaffold Report",
+        "",
+        f"- workflow_json_path: `{report.get('workflow_json_path', '')}`",
+        f"- slug: `{report.get('slug', '')}`",
+        "",
+        "## Generated Files",
+    ]
+    generated_files = report.get("generated_files", [])
+    if generated_files:
+        lines.extend([f"- `{path}`" for path in generated_files])
+    else:
+        lines.append("- None")
+
+    lines.extend(
+        [
+            "",
+            "## Extracted Defaults",
+            f"- positive_prompt: `{report.get('extracted_default_positive_prompt', '')}`",
+            f"- negative_prompt: `{report.get('extracted_default_negative_prompt', '')}`",
+            f"- filename_prefix: `{report.get('extracted_filename_prefix', '')}`",
+        ]
+    )
+
+    manual = report.get("manual_review_items", [])
+    lines.append("")
+    lines.append("## Manual Review Items")
+    if manual:
+        lines.extend([f"- {item}" for item in manual])
+    else:
+        lines.append("- None")
+
+    warnings = report.get("warnings", [])
+    lines.append("")
+    lines.append("## Warnings")
+    if warnings:
+        lines.extend([f"- {item}" for item in warnings])
+    else:
+        lines.append("- None")
+
+    next_commands = report.get("next_commands", [])
+    lines.append("")
+    lines.append("## Next Commands")
+    if next_commands:
+        lines.extend([f"- `{cmd}`" for cmd in next_commands])
+    else:
+        lines.append("- None")
+    return "\n".join(lines) + "\n"
+
+
+def _build_next_commands(slug: str) -> list[str]:
+    return [
+        (
+            "python scripts/run_batch_generation.py --config configs/{slug}_api.yaml "
+            "--prompt-pack examples/prompt_packs/{slug}_default_from_workflow.csv "
+            "--mode workflow_import_pipeline --run-name {slug}_default_round1"
+        ).format(slug=slug),
+        (
+            "python scripts/run_batch_generation.py --config configs/{slug}_api.yaml "
+            "--prompt-pack examples/prompt_packs/{slug}_default_from_workflow.csv "
+            "--mode submit --run-name {slug}_default_round1"
+        ).format(slug=slug),
+        (
+            "python scripts/run_batch_generation.py --config configs/{slug}_api.yaml "
+            "--prompt-pack examples/prompt_packs/{slug}_prompt_pack.csv "
+            "--mode workflow_import_pipeline --run-name {slug}_round1"
+        ).format(slug=slug),
+        (
+            "python scripts/run_batch_generation.py --config configs/{slug}_api.yaml "
+            "--prompt-pack examples/prompt_packs/{slug}_prompt_pack.csv "
+            "--mode submit --run-name {slug}_round1"
+        ).format(slug=slug),
+        "results/runs/{slug}_round1/".format(slug=slug),
+    ]
+
+
+def _write_next_commands_file(path: Path, commands: list[str]) -> None:
+    lines = [
+        "# Next Commands",
+        "",
+        "## Use workflow default prompt",
+        commands[0] if len(commands) > 0 else "",
+        "",
+        commands[1] if len(commands) > 1 else "",
+        "",
+        "## Use editable prompt pack",
+        commands[2] if len(commands) > 2 else "",
+        "",
+        commands[3] if len(commands) > 3 else "",
+        "",
+        "## Check outputs",
+        commands[4] if len(commands) > 4 else "",
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _prepare_scaffold_targets(
+    *,
+    targets: list[Path],
+    force: bool,
+    backup_dir: Path,
+) -> None:
+    existing = [path for path in targets if path.exists()]
+    if not existing:
+        return
+    if not force:
+        first = existing[0]
+        raise FileExistsError(
+            f"File already exists. Use --force to overwrite. Existing path: {first.as_posix()}"
+        )
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    for path in existing:
+        rel = path.as_posix().replace("/", "__")
+        shutil.copy2(path, backup_dir / rel)
+
+
+def _validate_workflow_for_scaffold(workflow_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = load_workflow_payload(workflow_path)
+    if isinstance(payload.get("nodes"), list):
+        raise ValueError(
+            "This looks like a ComfyUI UI workflow, not API workflow. Please use Export(API)."
+        )
+    format_name = detect_workflow_format(payload)
+    if format_name == "comfyui_ui":
+        raise ValueError(
+            "This looks like a ComfyUI UI workflow, not API workflow. Please use Export(API)."
+        )
+    workflow = load_workflow_json(workflow_path)
+    inspection = inspect_workflow_path(workflow_path)
+    if not inspection.get("detected_output_nodes", []):
+        raise ValueError(
+            "Scaffold requires at least one SaveImage or equivalent output node."
+        )
+    if not inspection.get("detected_prompt_nodes", []):
+        raise ValueError(
+            "Scaffold requires at least one prompt-related node (for example CLIPTextEncode)."
+        )
+    return workflow, inspection
 
 
 def _render_patch_report_markdown(
@@ -693,6 +1086,434 @@ def run_suggest_mapping(args: argparse.Namespace, config: dict[str, Any]) -> Non
     print(f"[OK] Suggestion report JSON: {output_json}")
     print(f"[OK] Mapping diff Markdown: {output_diff_md}")
     print(f"[OK] Manual review YAML: {output_manual_review}")
+
+
+def _collect_prompt_candidates(
+    *,
+    workflow: dict[str, Any],
+    inspection: dict[str, Any],
+) -> list[dict[str, Any]]:
+    graph = _extract_prompt_graph(workflow)
+    candidates: list[dict[str, Any]] = []
+    for node in inspection.get("detected_prompt_nodes", []):
+        node_id = str(node.get("node_id", "")).strip()
+        input_key = str(node.get("input_key", "text")).strip() or "text"
+        value = _get_input_value(graph, node_id, input_key)
+        text = str(value).strip() if isinstance(value, str) else ""
+        candidates.append(
+            {
+                "node_id": node_id,
+                "role": str(node.get("role", "unknown")),
+                "input_key": input_key,
+                "text": text,
+            }
+        )
+    return candidates
+
+
+def _select_default_prompts_for_scaffold(
+    *,
+    workflow: dict[str, Any],
+    inspection: dict[str, Any],
+    mapping: dict[str, Any],
+) -> tuple[str, str, list[str], list[str]]:
+    defaults = _extract_workflow_defaults(workflow=workflow, mapping=mapping)
+    positive = str(defaults.get("positive_prompt", "")).strip()
+    negative = str(defaults.get("negative_prompt", "")).strip()
+    warnings: list[str] = []
+    manual_review_items: list[str] = []
+
+    candidates = _collect_prompt_candidates(workflow=workflow, inspection=inspection)
+    positive_candidates = [item for item in candidates if item.get("role") == "positive"]
+    if len(positive_candidates) > 1:
+        manual_review_items.append(
+            "Multiple positive prompt nodes detected; auto-selected highest-confidence mapping."
+        )
+    if not positive:
+        preferred = positive_candidates or [item for item in candidates if item.get("text", "")]
+        if preferred:
+            positive = str(preferred[0].get("text", "")).strip()
+            warnings.append("positive_prompt fallback used first detected prompt node text.")
+
+    negative_candidates = [item for item in candidates if item.get("role") == "negative"]
+    if not negative and negative_candidates:
+        negative = str(negative_candidates[0].get("text", "")).strip()
+        warnings.append("negative_prompt fallback used detected negative prompt node text.")
+    if not negative_candidates:
+        manual_review_items.append("No negative_prompt node detected; negative prompt left empty.")
+    return positive, negative, warnings, manual_review_items
+
+
+def _build_scaffold_config_payload(
+    *,
+    slug: str,
+    workflow_json_path: Path,
+    node_map_path: Path,
+    prompt_pack_path: Path,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    latent_defaults: dict[str, Any],
+    sampler_defaults: dict[str, Any],
+    model_family: str,
+    lora_defaults: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "prompt_pack_default": str(prompt_pack_path.as_posix()),
+        "project": {
+            "name": "game-aigc-asset-workflow",
+            "task_group": "workflow_scaffold",
+            "stage": "scaffold_generated",
+            "description": f"Auto-generated scaffold config for {slug}.",
+        },
+        "task": {
+            "type": "baseline_generation",
+            "asset_type": "concept_art",
+            "scenario": f"{slug}_scaffold",
+            "target_engine": "UE5",
+        },
+        "runtime": {
+            "seed": int(sampler_defaults["seed"]),
+            "device": "cuda",
+            "dtype": "fp16",
+            "mixed_precision": True,
+        },
+        "generation": {
+            "prompt": positive_prompt,
+            "negative_prompt": negative_prompt,
+            "width": int(latent_defaults["width"]),
+            "height": int(latent_defaults["height"]),
+            "batch_size": int(latent_defaults["batch_size"]),
+            "num_images": 1,
+            "num_inference_steps": int(sampler_defaults["steps"]),
+            "guidance_scale": float(sampler_defaults["cfg"]),
+            "sampler": str(sampler_defaults["sampler"]),
+            "scheduler": str(sampler_defaults["scheduler"]),
+            "denoise": float(sampler_defaults["denoise"]),
+            "filename_prefix": filename_prefix,
+            "output_subdir": f"outputs/{slug}",
+        },
+        "model": {
+            "family": model_family,
+            "base_model_name": slug,
+            "variant": "api_workflow",
+            "use_lora": bool(lora_defaults),
+            "lora_path": str((lora_defaults or {}).get("path", "")),
+            "lora_strength": float((lora_defaults or {}).get("strength_model", 1.0)),
+            "use_controlnet": False,
+            "controlnet_model_name": "",
+            "controlnet_strength": 0.8,
+        },
+        "comfyui": {
+            "enabled": True,
+            "comfyui_root": "ComfyUI",
+            "base_url": "http://127.0.0.1:8000",
+            "run_name": f"{slug}_api",
+            "mode": "workflow_import_pipeline",
+            "mapping_mode": "manual_map",
+            "workflow_json": str(workflow_json_path.as_posix()),
+            "node_map": str(node_map_path.as_posix()),
+            "default_prompt_pack": str(prompt_pack_path.as_posix()),
+            "workflow_model_family": model_family,
+            "strict_model_dir_check": False,
+            "patch_save_image_output_dir": False,
+            "save_image_output_dir": "",
+        },
+        "lora": {
+            "enabled": bool(lora_defaults),
+            "path": str((lora_defaults or {}).get("path", "")),
+            "strength": float((lora_defaults or {}).get("strength_model", 1.0)),
+            "strength_model": float((lora_defaults or {}).get("strength_model", 1.0)),
+        },
+        "controlnet": {
+            "enabled": False,
+            "model_name": "",
+            "control_image_path": "",
+            "strength": 0.8,
+        },
+    }
+    if lora_defaults and "strength_clip" in lora_defaults:
+        payload["lora"]["strength_clip"] = float(lora_defaults["strength_clip"])
+    return payload
+
+
+def _run_scaffold_validate(
+    *,
+    config_path: Path,
+    prompt_pack_path: Path,
+    slug: str,
+    submit_after_validate: bool,
+) -> dict[str, Any]:
+    validate_run_name = f"{slug}_scaffold_validate"
+    result: dict[str, Any] = {
+        "enabled": True,
+        "run_name": validate_run_name,
+        "submit_after_validate": bool(submit_after_validate),
+        "pipeline_success": False,
+        "submit_success": False,
+        "error": "",
+    }
+    config = load_yaml_config(config_path)
+    args_pipeline = argparse.Namespace(
+        config=str(config_path.as_posix()),
+        prompt_pack=str(prompt_pack_path.as_posix()),
+        output_json="",
+        mode="workflow_import_pipeline",
+        workflow_json="",
+        node_map="",
+        mapping_mode="",
+        comfyui_url="",
+        client_id="",
+        comfyui_root="",
+        run_name=validate_run_name,
+        slug="",
+        force=False,
+        validate=False,
+        submit_after_validate=False,
+    )
+    run_workflow_import_pipeline(args_pipeline, config)
+    result["pipeline_success"] = True
+
+    if submit_after_validate:
+        args_submit = argparse.Namespace(
+            config=str(config_path.as_posix()),
+            prompt_pack=str(prompt_pack_path.as_posix()),
+            output_json="",
+            mode="submit",
+            workflow_json="",
+            node_map="",
+            mapping_mode="manual_map",
+            comfyui_url="",
+            client_id="",
+            comfyui_root="",
+            run_name=validate_run_name,
+            slug="",
+            force=False,
+            validate=False,
+            submit_after_validate=False,
+        )
+        workflow_path = _resolve_workflow_path(args_submit, config)
+        run_dir = _resolve_run_dir(args=args_submit, config=config, workflow_path=workflow_path)
+        manifest = _build_manifest_if_needed(args_submit, config, run_dir=run_dir)
+        if manifest is None:
+            raise RuntimeError("Validate submit failed: manifest could not be generated.")
+        _patch_workflows_common(
+            args=args_submit,
+            config=config,
+            manifest=manifest,
+            run_dir=run_dir,
+            submit=True,
+            force_auto_mode=False,
+        )
+        result["submit_success"] = True
+    return result
+
+
+def run_scaffold_workflow(args: argparse.Namespace) -> None:
+    workflow_path_text = str(args.workflow_json or "").strip()
+    if not workflow_path_text:
+        raise ValueError("--workflow-json is required for scaffold_workflow.")
+    workflow_path = Path(workflow_path_text)
+    if not workflow_path.exists():
+        raise FileNotFoundError(f"Workflow JSON not found: {workflow_path.as_posix()}")
+
+    slug = _infer_scaffold_slug(workflow_path, str(args.slug or ""))
+    run_dir = Path("results") / "runs" / f"scaffold_{slug}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    workflow, inspection = _validate_workflow_for_scaffold(workflow_path)
+    mapping_suggestion = suggest_node_mapping(inspection_result=inspection, existing_mapping=None)
+    mapping = mapping_suggestion["mapping"]
+    required = mapping.get("required", {}) if isinstance(mapping, dict) else {}
+    if isinstance(required, dict):
+        negative_binding = required.get("negative_prompt", {})
+        if isinstance(negative_binding, dict):
+            node_id = str(negative_binding.get("node_id", "")).strip()
+            if not node_id:
+                negative_binding["node_id"] = ""
+                negative_binding["input_key"] = ""
+
+    positive_default, negative_default, prompt_warnings, prompt_manual_review = (
+        _select_default_prompts_for_scaffold(
+            workflow=workflow,
+            inspection=inspection,
+            mapping=mapping,
+        )
+    )
+    if not positive_default:
+        raise ValueError("Failed to extract default positive prompt from workflow.")
+
+    latent_defaults, latent_fallback = _extract_latent_defaults(inspection)
+    sampler_defaults, sampler_fallback = _extract_sampler_defaults(inspection)
+    filename_prefix, prefix_fallback = _extract_filename_prefix_default(inspection, slug)
+    lora_defaults = _extract_lora_defaults(inspection=inspection, workflow=workflow)
+    model_family = _infer_model_family_for_scaffold(inspection)
+
+    config_path = Path("configs") / f"{slug}_api.yaml"
+    node_map_path = Path("configs") / "node_maps" / f"{slug}_node_map.yaml"
+    default_prompt_pack_path = (
+        Path("examples") / "prompt_packs" / f"{slug}_default_from_workflow.csv"
+    )
+    editable_prompt_pack_path = Path("examples") / "prompt_packs" / f"{slug}_prompt_pack.csv"
+    scaffold_report_json_path = run_dir / "scaffold_report.json"
+    scaffold_report_md_path = run_dir / "scaffold_report.md"
+    next_commands_path = run_dir / "next_commands.md"
+
+    _prepare_scaffold_targets(
+        targets=[config_path, node_map_path, default_prompt_pack_path, editable_prompt_pack_path],
+        force=bool(args.force),
+        backup_dir=run_dir / "backup",
+    )
+
+    config_payload = _build_scaffold_config_payload(
+        slug=slug,
+        workflow_json_path=workflow_path,
+        node_map_path=node_map_path,
+        prompt_pack_path=editable_prompt_pack_path,
+        positive_prompt=positive_default,
+        negative_prompt=negative_default,
+        filename_prefix=filename_prefix,
+        latent_defaults=latent_defaults,
+        sampler_defaults=sampler_defaults,
+        model_family=model_family,
+        lora_defaults=lora_defaults,
+    )
+
+    unsupported_fields: list[str] = []
+    neg = required.get("negative_prompt", {}) if isinstance(required, dict) else {}
+    if not str(neg.get("node_id", "")).strip():
+        unsupported_fields.append("negative_prompt")
+
+    manual_review_items = list(mapping_suggestion.get("needs_manual_confirmation", []))
+    manual_review_items.extend(prompt_manual_review)
+    warnings = list(prompt_warnings)
+    if _collect_detected_lora_nodes(inspection) and not lora_defaults:
+        manual_review_items.append("LoRA node exists but defaults could not be extracted.")
+    if "generation.batch_size" in latent_fallback:
+        manual_review_items.append("batch_size field not found in latent node; fallback value used.")
+    for custom in inspection.get("detected_custom_nodes", []):
+        manual_review_items.append(
+            "Unrecognized custom node: {class_type} (node {node_id})".format(
+                class_type=custom.get("class_type", "unknown"),
+                node_id=custom.get("node_id", ""),
+            )
+        )
+
+    save_mapping_yaml(mapping, node_map_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        yaml.safe_dump(config_payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    _write_csv_rows(
+        default_prompt_pack_path,
+        fieldnames=["id", "positive_prompt", "negative_prompt", "filename_prefix"],
+        rows=[
+            {
+                "id": "1",
+                "positive_prompt": positive_default,
+                "negative_prompt": negative_default,
+                "filename_prefix": filename_prefix,
+            }
+        ],
+    )
+    _write_csv_rows(
+        editable_prompt_pack_path,
+        fieldnames=[
+            "id",
+            "subject",
+            "style",
+            "attributes",
+            "positive_prompt",
+            "negative_prompt",
+            "filename_prefix",
+        ],
+        rows=[
+            {
+                "id": "1",
+                "subject": slug,
+                "style": "workflow_default",
+                "attributes": "imported_from_comfyui",
+                "positive_prompt": positive_default,
+                "negative_prompt": negative_default,
+                "filename_prefix": filename_prefix,
+            }
+        ],
+    )
+
+    next_commands = _build_next_commands(slug)
+    _write_next_commands_file(next_commands_path, next_commands)
+
+    report: dict[str, Any] = {
+        "workflow_json_path": str(workflow_path.as_posix()),
+        "slug": slug,
+        "generated_files": [
+            str(config_path.as_posix()),
+            str(node_map_path.as_posix()),
+            str(default_prompt_pack_path.as_posix()),
+            str(editable_prompt_pack_path.as_posix()),
+            str(scaffold_report_json_path.as_posix()),
+            str(scaffold_report_md_path.as_posix()),
+            str(next_commands_path.as_posix()),
+        ],
+        "detected_nodes": {
+            "node_count": int(inspection.get("node_count", 0)),
+            "class_types": inspection.get("class_types", []),
+        },
+        "detected_prompt_nodes": inspection.get("detected_prompt_nodes", []),
+        "detected_sampler_nodes": inspection.get("detected_sampler_nodes", []),
+        "detected_size_nodes": inspection.get("detected_latent_nodes", []),
+        "detected_save_nodes": inspection.get("detected_output_nodes", []),
+        "detected_lora_nodes": _collect_detected_lora_nodes(inspection),
+        "detected_model_loaders": _collect_detected_model_loaders(inspection),
+        "generated_node_map": mapping,
+        "config_defaults": {
+            "width": latent_defaults["width"],
+            "height": latent_defaults["height"],
+            "batch_size": latent_defaults["batch_size"],
+            "seed": sampler_defaults["seed"],
+            "steps": sampler_defaults["steps"],
+            "cfg": sampler_defaults["cfg"],
+            "sampler_name": sampler_defaults["sampler"],
+            "scheduler": sampler_defaults["scheduler"],
+            "denoise": sampler_defaults["denoise"],
+            "filename_prefix": filename_prefix,
+            "fallback_fields": sorted(set(latent_fallback + sampler_fallback + prefix_fallback)),
+            "model_family": model_family,
+        },
+        "extracted_default_positive_prompt": positive_default,
+        "extracted_default_negative_prompt": negative_default,
+        "extracted_filename_prefix": filename_prefix,
+        "unsupported_fields": unsupported_fields,
+        "manual_review_items": sorted(set(manual_review_items)),
+        "warnings": sorted(set(warnings)),
+        "next_commands": next_commands,
+        "validate": {"enabled": bool(args.validate), "run_name": "", "pipeline_success": False},
+    }
+
+    if args.validate:
+        validate_result = _run_scaffold_validate(
+            config_path=config_path,
+            prompt_pack_path=default_prompt_pack_path,
+            slug=slug,
+            submit_after_validate=bool(args.submit_after_validate),
+        )
+        report["validate"] = validate_result
+
+    _write_json(scaffold_report_json_path, report)
+    scaffold_report_md_path.write_text(
+        _render_scaffold_report_markdown(report),
+        encoding="utf-8",
+    )
+
+    print(f"[OK] Scaffold completed for slug: {slug}")
+    print(f"[OK] Generated config: {config_path.as_posix()}")
+    print(f"[OK] Generated node map: {node_map_path.as_posix()}")
+    print(f"[OK] Generated default prompt pack: {default_prompt_pack_path.as_posix()}")
+    print(f"[OK] Generated editable prompt pack: {editable_prompt_pack_path.as_posix()}")
+    print(f"[OK] Scaffold report JSON: {scaffold_report_json_path.as_posix()}")
+    print(f"[OK] Scaffold report Markdown: {scaffold_report_md_path.as_posix()}")
+    print(f"[OK] Next commands: {next_commands_path.as_posix()}")
 
 
 def run_export_default_prompt_pack(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -1413,9 +2234,19 @@ def _patch_workflows_common(
 
 def main() -> None:
     args = parse_args()
-    config = load_yaml_config(Path(args.config))
+    args.mode = _normalize_mode_alias(args.mode)
 
     try:
+        if args.mode == "scaffold_workflow":
+            run_scaffold_workflow(args)
+            return
+
+        if _mode_requires_config(args.mode):
+            config_path = _require_config_path_for_mode(args)
+            config = load_yaml_config(config_path)
+        else:
+            config = {}
+
         if args.mode == "inspect_workflow":
             run_inspect_workflow(args, config)
             return

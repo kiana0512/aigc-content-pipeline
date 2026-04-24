@@ -39,6 +39,23 @@ python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml -
 python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --mode export_default_prompt_pack
 ```
 
+## 接入一个新的 ComfyUI API workflow
+1. 把新 JSON 放到 `workflows/comfyui/`
+2. 运行 scaffold 自动生成配套文件
+```powershell
+python scripts/run_batch_generation.py --mode scaffold_workflow --workflow-json workflows/comfyui/my_new_workflow_api.json --slug my_new_workflow
+```
+3. 用默认 prompt 跑一轮（复现 workflow 默认图）
+```powershell
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode workflow_import_pipeline --run-name my_new_workflow_default_round1
+python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode submit --run-name my_new_workflow_default_round1
+```
+
+支持参数：
+- `--force`：覆盖已存在 scaffold 文件（会备份到 `results/runs/scaffold_<slug>/backup/`）
+- `--validate`：生成后自动跑一次 `workflow_import_pipeline`
+- `--submit-after-validate`：仅与 `--validate` 一起使用，验证后自动提交
+
 ## 关键输出
 - `results/runs/<run_name>/run_manifest.json`
 - `results/runs/<run_name>/patched_workflows/item_0001_patched_workflow.json`

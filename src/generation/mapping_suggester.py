@@ -82,6 +82,9 @@ def suggest_node_mapping(
         suggestion["optional"]["lora"]["strength_key"] = str(
             lora.get("strength_key", "strength_model")
         )
+        suggestion["optional"]["lora"]["strength_clip_key"] = str(
+            lora.get("strength_clip_key", "")
+        )
         confidence["optional.lora"] = "high"
     else:
         confidence["optional.lora"] = "low"
@@ -271,6 +274,7 @@ def _build_base_mapping_template() -> dict[str, Any]:
                 "enabled_key": "",
                 "path_key": "lora_name",
                 "strength_key": "strength_model",
+                "strength_clip_key": "",
             },
             "controlnet": {
                 "enabled_node_id": "",
@@ -328,6 +332,7 @@ def _pick_lora_node(inspection_result: dict[str, Any]) -> dict[str, Any] | None:
                 "node_id": str(node.get("node_id", "")),
                 "path_key": "lora_name" if "lora_name" in keys else "",
                 "strength_key": strength_key,
+                "strength_clip_key": "strength_clip" if "strength_clip" in keys else "",
             }
     return None
 
