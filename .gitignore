@@ -1,13 +1,9 @@
-# =========================
-# OS
-# =========================
+﻿# OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# =========================
 # Python
-# =========================
 __pycache__/
 *.py[cod]
 *.pyo
@@ -17,40 +13,20 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# =========================
-# Virtual environments
-# =========================
+# Virtual envs
 .venv/
 venv/
 env/
 ENV/
-
-# =========================
-# Conda
-# =========================
 .conda/
 conda-meta/
 
-# =========================
-# IDE / Editor
-# =========================
+# IDE
 .idea/
 .vscode/
 
-# =========================
-# Jupyter
-# =========================
+# Tool caches
 .ipynb_checkpoints/
-
-# =========================
-# Logs
-# =========================
-logs/
-*.log
-
-# =========================
-# Testing / cache / build
-# =========================
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -59,32 +35,23 @@ htmlcov/
 build/
 dist/
 
-# =========================
-# Local config / secrets
-# =========================
+# Logs / temp
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Secrets
 .env
 .env.*
 *.local
 secrets.yaml
 secrets.yml
 
-# =========================
-# Data
-# Keep folder structure, ignore actual data files
-# =========================
-data/raw/*
-data/interim/*
-data/processed/*
-data/metadata/*
-
-!data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
-!data/metadata/.gitkeep
-
-# =========================
-# Model checkpoints / weights
-# =========================
+# Models / heavy binaries
 models/
 checkpoints/
 weights/
@@ -96,34 +63,13 @@ weights/
 *.engine
 *.safetensors
 
-# =========================
-# Outputs / experiment results
-# =========================
+# Runtime outputs
 outputs/
-results/
-runs/
-tmp/
-temp/
+results/runs/*
+!results/runs/.gitkeep
 
-examples/outputs/*
-!examples/outputs/.gitkeep
-
-ue5_validation/screenshots/*
-!ue5_validation/screenshots/.gitkeep
-
-# =========================
-# ComfyUI / diffusion workflow artifacts
-# =========================
+# ComfyUI artifacts
 comfyui_output/
 comfyui_temp/
 *.latent
 *.npz
-
-# =========================
-# Misc
-# =========================
-*.bak
-*.swp
-*.tmp
-temp_prompt_pack.csv
-tmp_prompt_pack.csv

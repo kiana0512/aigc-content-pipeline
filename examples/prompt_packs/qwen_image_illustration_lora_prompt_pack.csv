@@ -1,0 +1,3 @@
+id,subject,style,attributes,positive_prompt,negative_prompt,filename_prefix
+1,qwen_lora_warrior,illustration,character,"game character illustration, young warrior, clean cel shading, bold composition, high quality","low quality, blurry, bad anatomy, watermark","qwen_lora/warrior"
+2,qwen_lora_mage,illustration,character,"anime style fantasy mage girl, staff, glowing magic circle, 90s animation texture","low quality, blurry, bad anatomy, watermark","qwen_lora/mage"

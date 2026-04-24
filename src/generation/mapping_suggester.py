@@ -40,12 +40,12 @@ def suggest_node_mapping(
         manual_confirmation.append("required.negative_prompt")
 
     if latent:
-        suggestion["required"]["latent_size"]["node_id"] = str(latent.get("node_id", ""))
-        suggestion["required"]["latent_size"]["width_key"] = str(
-            latent.get("width_key", "width")
-        )
-        suggestion["required"]["latent_size"]["height_key"] = str(
-            latent.get("height_key", "height")
+        latent_map = suggestion["required"]["latent_size"]
+        latent_map["node_id"] = str(latent.get("node_id", ""))
+        latent_map["width_key"] = str(latent.get("width_key", "width"))
+        latent_map["height_key"] = str(latent.get("height_key", "height"))
+        latent_map["batch_size_key"] = str(
+            latent.get("batch_size_key", "batch_size")
         )
         confidence["required.latent_size"] = "high"
     else:
@@ -60,6 +60,7 @@ def suggest_node_mapping(
         sampler_map["cfg_key"] = str(sampler.get("cfg_key", "cfg"))
         sampler_map["sampler_key"] = str(sampler.get("sampler_key", "sampler_name"))
         sampler_map["scheduler_key"] = str(sampler.get("scheduler_key", "scheduler"))
+        sampler_map["denoise_key"] = str(sampler.get("denoise_key", "denoise"))
         confidence["required.sampler"] = "high"
     else:
         confidence["required.sampler"] = "low"
@@ -81,8 +82,7 @@ def suggest_node_mapping(
         suggestion["optional"]["lora"]["strength_key"] = str(
             lora.get("strength_key", "strength_model")
         )
-        confidence["optional.lora"] = "medium"
-        manual_confirmation.append("optional.lora.enabled_key")
+        confidence["optional.lora"] = "high"
     else:
         confidence["optional.lora"] = "low"
 
@@ -104,12 +104,51 @@ def suggest_node_mapping(
     diff_report = (
         compare_mappings(existing_mapping, merged_mapping) if existing_mapping else {}
     )
+    field_bindings = build_flat_field_bindings(merged_mapping)
+    low_confidence_fields = [
+        path for path, level in confidence.items() if str(level).lower() != "high"
+    ]
+    manual_confirmation.extend(low_confidence_fields)
 
     return {
         "mapping": merged_mapping,
+        "field_bindings": field_bindings,
         "confidence": confidence,
         "needs_manual_confirmation": sorted(set(manual_confirmation)),
         "diff_vs_existing": diff_report,
+    }
+
+
+def build_flat_field_bindings(mapping: dict[str, Any]) -> dict[str, dict[str, str]]:
+    required = mapping.get("required", {}) if isinstance(mapping, dict) else {}
+    optional = mapping.get("optional", {}) if isinstance(mapping, dict) else {}
+
+    positive = required.get("positive_prompt", {}) if isinstance(required, dict) else {}
+    negative = required.get("negative_prompt", {}) if isinstance(required, dict) else {}
+    latent = required.get("latent_size", {}) if isinstance(required, dict) else {}
+    sampler = required.get("sampler", {}) if isinstance(required, dict) else {}
+    save_image = optional.get("save_image", {}) if isinstance(optional, dict) else {}
+    lora = optional.get("lora", {}) if isinstance(optional, dict) else {}
+
+    return {
+        "positive_prompt": _binding(positive.get("node_id"), positive.get("input_key")),
+        "negative_prompt": _binding(negative.get("node_id"), negative.get("input_key")),
+        "width": _binding(latent.get("node_id"), latent.get("width_key")),
+        "height": _binding(latent.get("node_id"), latent.get("height_key")),
+        "batch_size": _binding(latent.get("node_id"), latent.get("batch_size_key")),
+        "seed": _binding(sampler.get("node_id"), sampler.get("seed_key")),
+        "steps": _binding(sampler.get("node_id"), sampler.get("steps_key")),
+        "cfg": _binding(sampler.get("node_id"), sampler.get("cfg_key")),
+        "sampler_name": _binding(sampler.get("node_id"), sampler.get("sampler_key")),
+        "scheduler": _binding(sampler.get("node_id"), sampler.get("scheduler_key")),
+        "denoise": _binding(sampler.get("node_id"), sampler.get("denoise_key")),
+        "filename_prefix": _binding(
+            save_image.get("node_id"), save_image.get("filename_prefix_key")
+        ),
+        "lora_name": _binding(lora.get("node_id"), lora.get("path_key")),
+        "lora_strength_model": _binding(
+            lora.get("node_id"), lora.get("strength_key")
+        ),
     }
 
 
@@ -146,8 +185,10 @@ def build_mapping_manual_review_payload(suggestion: dict[str, Any]) -> dict[str,
         "status": "needs_manual_confirmation",
         "items": list(suggestion.get("needs_manual_confirmation", [])),
         "confidence": suggestion.get("confidence", {}),
+        "field_bindings": suggestion.get("field_bindings", {}),
         "note": (
-            "以下条目为自动识别低置信或无法确认项，请在提交批量任务前人工核对。"
+            "The listed items are low-confidence or unresolved fields. "
+            "Please confirm manually before production use."
         ),
     }
 
@@ -171,10 +212,10 @@ def build_mapping_diff_markdown(diff_report: dict[str, Any]) -> str:
         "",
     ]
     if not changes:
-        lines.append("无差异。")
+        lines.append("No changes.")
         return "\n".join(lines) + "\n"
 
-    lines.append("| 路径 | 旧值 | 新值 |")
+    lines.append("| Path | Old | New |")
     lines.append("| --- | --- | --- |")
     for item in changes:
         old = str(item.get("old", "")).replace("\n", "\\n")
@@ -203,7 +244,12 @@ def _build_base_mapping_template() -> dict[str, Any]:
         "required": {
             "positive_prompt": {"node_id": "", "input_key": "text"},
             "negative_prompt": {"node_id": "", "input_key": "text"},
-            "latent_size": {"node_id": "", "width_key": "width", "height_key": "height"},
+            "latent_size": {
+                "node_id": "",
+                "width_key": "width",
+                "height_key": "height",
+                "batch_size_key": "batch_size",
+            },
             "sampler": {
                 "node_id": "",
                 "seed_key": "seed",
@@ -211,6 +257,7 @@ def _build_base_mapping_template() -> dict[str, Any]:
                 "cfg_key": "cfg",
                 "sampler_key": "sampler_name",
                 "scheduler_key": "scheduler",
+                "denoise_key": "denoise",
             },
         },
         "optional": {
@@ -236,6 +283,13 @@ def _build_base_mapping_template() -> dict[str, Any]:
                 "image_key": "image",
             },
         },
+    }
+
+
+def _binding(node_id: Any, input_key: Any) -> dict[str, str]:
+    return {
+        "node_id": str(node_id or ""),
+        "input": str(input_key or ""),
     }
 
 

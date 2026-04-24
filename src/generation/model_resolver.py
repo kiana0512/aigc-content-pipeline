@@ -17,8 +17,10 @@ MODEL_FILE_EXTENSIONS = {
 COMFYUI_MODEL_DIR_KEYS = [
     "checkpoints",
     "diffusion_models",
+    "unet",
     "vae",
     "text_encoders",
+    "clip",
     "clip_vision",
     "loras",
     "controlnet",
@@ -39,8 +41,8 @@ COMFYUI_MODEL_DIR_KEYS = [
 
 MODEL_KIND_TO_DIR_KEYS: dict[str, list[str]] = {
     "checkpoint": ["checkpoints"],
-    "unet": ["diffusion_models", "checkpoints"],
-    "text_encoder": ["text_encoders", "checkpoints"],
+    "unet": ["diffusion_models", "unet", "checkpoints"],
+    "text_encoder": ["text_encoders", "clip", "checkpoints"],
     "vae": ["vae"],
     "lora": ["loras"],
     "controlnet": ["controlnet"],

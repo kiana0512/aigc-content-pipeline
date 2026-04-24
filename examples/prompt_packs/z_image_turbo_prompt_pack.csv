@@ -1,0 +1,3 @@
+id,subject,style,attributes,positive_prompt,negative_prompt,filename_prefix
+1,z_turbo_character,concept,portrait,"fantasy female ranger, short silver hair, forest ruins background, painterly concept art","low quality, blurry, watermark","z_image_turbo/character"
+2,z_turbo_environment,concept,environment,"stylized game environment, ancient ruins, glowing crystal, cinematic lighting","low quality, blurry, watermark","z_image_turbo/environment"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ KNOWN_NODE_TYPES = {
     "ControlNetLoader",
     "VAEDecode",
     "LoadImage",
+    "ModelSamplingAuraFlow",
+    "ConditioningZeroOut",
 }
 
 LOADER_MODEL_KEYS: dict[str, dict[str, str]] = {
@@ -41,6 +44,7 @@ SAMPLER_NODE_TYPES = {"KSampler"}
 PROMPT_NODE_TYPES = {"CLIPTextEncode"}
 OUTPUT_NODE_TYPES = {"SaveImage"}
 LOADER_NODE_TYPES = set(LOADER_MODEL_KEYS.keys()) | {"LoadImage"}
+NODE_ID_PATTERN = re.compile(r"^\d+(?::\d+)*$")
 
 
 def load_workflow_payload(path: str | Path) -> dict[str, Any]:
@@ -132,6 +136,7 @@ def inspect_workflow(payload: dict[str, Any]) -> dict[str, Any]:
         "detected_model_files": detected_model_files,
         "detected_parameters": detected_parameters,
         "unresolved_nodes": unresolved_nodes,
+        "unknown_nodes": unresolved_nodes,
         "edges": edges,
         "known_node_count": len(known_node_ids),
         "detected_model_families": families,
@@ -237,10 +242,10 @@ def _is_placeholder_workflow(payload: dict[str, Any]) -> bool:
 def _is_api_prompt_graph(payload: Any) -> bool:
     if not isinstance(payload, dict) or not payload:
         return False
-    digit_keys = [str(key) for key in payload.keys() if str(key).isdigit()]
-    if not digit_keys:
+    node_keys = [str(key) for key in payload.keys() if _looks_like_node_id(str(key))]
+    if not node_keys:
         return False
-    for key in digit_keys:
+    for key in node_keys:
         node = payload.get(key)
         if not isinstance(node, dict):
             return False
@@ -261,7 +266,7 @@ def _build_edges(prompt_graph: dict[str, Any]) -> list[dict[str, Any]]:
             if (
                 isinstance(input_value, list)
                 and len(input_value) >= 1
-                and str(input_value[0]).isdigit()
+                and _looks_like_node_id(str(input_value[0]))
             ):
                 edge = {
                     "from_node_id": str(input_value[0]),
@@ -293,11 +298,17 @@ def _detect_prompt_nodes(
         text_key = "text" if "text" in inputs else next(iter(inputs.keys()), "")
         text_value = str(inputs.get(text_key, ""))
         role = role_by_node.get(str(node_id), "unknown")
+        title = str((node.get("_meta", {}) or {}).get("title", "")).lower()
         lower_text = text_value.lower()
+        if role == "unknown":
+            if "negative" in title:
+                role = "negative"
+            elif "positive" in title or "prompt" in title:
+                role = "positive"
         if role == "unknown":
             if any(token in lower_text for token in ["negative", "low quality", "blurry"]):
                 role = "negative"
-            elif text_value.strip():
+            elif text_value.strip() or "positive" in title:
                 role = "positive"
         out.append(
             {
@@ -329,12 +340,14 @@ def _detect_sampler_nodes(prompt_graph: dict[str, Any]) -> list[dict[str, Any]]:
                 "cfg_key": "cfg" if "cfg" in inputs else "",
                 "sampler_key": sampler_key if sampler_key in inputs else "",
                 "scheduler_key": scheduler_key if scheduler_key in inputs else "",
+                "denoise_key": "denoise" if "denoise" in inputs else "",
                 "values": {
                     "seed": inputs.get("seed"),
                     "steps": inputs.get("steps"),
                     "cfg": inputs.get("cfg"),
                     "sampler": inputs.get(sampler_key),
                     "scheduler": inputs.get(scheduler_key) if scheduler_key else None,
+                    "denoise": inputs.get("denoise"),
                 },
             }
         )
@@ -374,8 +387,10 @@ def _detect_latent_nodes(prompt_graph: dict[str, Any]) -> list[dict[str, Any]]:
                 "class_type": class_type,
                 "width_key": "width" if "width" in inputs else "",
                 "height_key": "height" if "height" in inputs else "",
+                "batch_size_key": "batch_size" if "batch_size" in inputs else "",
                 "width": inputs.get("width"),
                 "height": inputs.get("height"),
+                "batch_size": inputs.get("batch_size"),
             }
         )
     return out
@@ -443,8 +458,10 @@ def _collect_detected_parameters(
         "cfg": None,
         "sampler": "",
         "scheduler": "",
+        "denoise": None,
         "width": None,
         "height": None,
+        "batch_size": None,
         "filename_prefix": "",
     }
 
@@ -462,10 +479,12 @@ def _collect_detected_parameters(
         params["cfg"] = values.get("cfg")
         params["sampler"] = values.get("sampler") or ""
         params["scheduler"] = values.get("scheduler") or ""
+        params["denoise"] = values.get("denoise")
 
     if detected_latent_nodes:
         params["width"] = detected_latent_nodes[0].get("width")
         params["height"] = detected_latent_nodes[0].get("height")
+        params["batch_size"] = detected_latent_nodes[0].get("batch_size")
 
     if detected_output_nodes:
         params["filename_prefix"] = detected_output_nodes[0].get("filename_prefix", "")
@@ -499,3 +518,7 @@ def _infer_model_families(
         families.append("classic_checkpoint")
 
     return families
+
+
+def _looks_like_node_id(value: str) -> bool:
+    return bool(NODE_ID_PATTERN.match(value))

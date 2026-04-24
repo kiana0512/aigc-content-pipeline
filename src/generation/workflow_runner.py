@@ -16,6 +16,30 @@ from .mapping_suggester import suggest_node_mapping
 from .model_resolver import build_model_resolution_report
 from .workflow_inspector import inspect_workflow_path
 
+POSITIVE_PROMPT_ALIASES = [
+    "positive_prompt",
+    "positive_prompt_text",
+    "prompt",
+    "prompt_text",
+    "text",
+]
+NEGATIVE_PROMPT_ALIASES = [
+    "negative_prompt",
+    "negative_prompt_text",
+    "neg_prompt",
+    "negative",
+    "negative_text",
+]
+FILENAME_PREFIX_ALIASES = [
+    "filename_prefix",
+    "output_prefix",
+    "file_prefix",
+]
+SEED_ALIASES = [
+    "seed",
+    "runtime_seed",
+]
+
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
     path = Path(path)
@@ -26,20 +50,44 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
 def load_prompt_pack_csv(path: str | Path) -> list[dict[str, str]]:
     path = Path(path)
     with path.open("r", newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
+    return [_normalize_prompt_row(row, row_index=i) for i, row in enumerate(rows, start=1)]
 
 
 def build_run_manifest(
     config: dict[str, Any],
     prompt_rows: list[dict[str, str]],
+    *,
+    config_path: str = "",
+    prompt_pack_path: str = "",
+    workflow_path: str = "",
+    workflow_defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     project_cfg = config.get("project", {})
     task_cfg = config.get("task", {})
     model_cfg = config.get("model", {})
     runtime_cfg = config.get("runtime", {})
     generation_cfg = config.get("generation", {})
+    lora_cfg = config.get("lora", {}) or {}
+    defaults = workflow_defaults or {}
+    steps_value = generation_cfg.get(
+        "num_inference_steps",
+        generation_cfg.get("steps", 30),
+    )
+    cfg_value = generation_cfg.get(
+        "guidance_scale",
+        generation_cfg.get("cfg", 7.0),
+    )
+    sampler_value = generation_cfg.get(
+        "sampler",
+        generation_cfg.get("sampler_name", "unknown_sampler"),
+    )
+    filename_prefix_value = str(generation_cfg.get("filename_prefix", "")).strip()
 
     manifest: dict[str, Any] = {
+        "config_path": str(config_path).strip(),
+        "prompt_pack_path": str(prompt_pack_path).strip(),
+        "workflow_path": str(workflow_path).strip(),
         "project_name": project_cfg.get("name", "unknown_project"),
         "task_type": task_cfg.get("type", "unknown_task"),
         "asset_type": task_cfg.get("asset_type", "unknown_asset"),
@@ -49,34 +97,108 @@ def build_run_manifest(
         "seed": runtime_cfg.get("seed", 42),
         "width": generation_cfg.get("width", 1024),
         "height": generation_cfg.get("height", 1024),
-        "num_inference_steps": generation_cfg.get("num_inference_steps", 30),
-        "guidance_scale": generation_cfg.get("guidance_scale", 7.0),
-        "sampler": generation_cfg.get("sampler", "unknown_sampler"),
+        "batch_size": generation_cfg.get("batch_size", 1),
+        "num_inference_steps": steps_value,
+        "guidance_scale": cfg_value,
+        "sampler": sampler_value,
         "scheduler": generation_cfg.get("scheduler", "unknown_scheduler"),
+        "denoise": generation_cfg.get("denoise", 1.0),
+        "filename_prefix": filename_prefix_value,
+        "lora_name": str(lora_cfg.get("path", model_cfg.get("lora_path", ""))).strip(),
+        "lora_strength_model": float(
+            lora_cfg.get("strength", model_cfg.get("lora_strength", 1.0))
+        ),
         "output_subdir": generation_cfg.get("output_subdir", "outputs/placeholder"),
+        "parameter_sources": {
+            "seed": "config.runtime.seed",
+            "width": "config.generation.width",
+            "height": "config.generation.height",
+            "batch_size": "config.generation.batch_size",
+            "num_inference_steps": "config.generation.num_inference_steps|steps",
+            "guidance_scale": "config.generation.guidance_scale|cfg",
+            "sampler": "config.generation.sampler|sampler_name",
+            "scheduler": "config.generation.scheduler",
+            "denoise": "config.generation.denoise",
+            "filename_prefix": "config.generation.filename_prefix",
+        },
         "items": [],
     }
 
-    for row in prompt_rows:
-        positive_prompt = row.get("positive_prompt_text", "").strip()
+    default_positive = str(generation_cfg.get("prompt", "")).strip()
+    default_negative = str(generation_cfg.get("negative_prompt", "")).strip()
+    workflow_default_positive = str(defaults.get("positive_prompt", "")).strip()
+    workflow_default_negative = str(defaults.get("negative_prompt", "")).strip()
+    for index, row in enumerate(prompt_rows, start=1):
+        item_id = str(row.get("id", "")).strip() or str(index)
+        positive_prompt = str(row.get("positive_prompt", "")).strip()
+        positive_source = str(row.get("positive_prompt_source", "")).strip()
+        if not positive_prompt:
+            if default_positive:
+                positive_prompt = default_positive
+                positive_source = "config.generation.prompt"
+            elif workflow_default_positive:
+                positive_prompt = workflow_default_positive
+                positive_source = "workflow_default.positive_prompt"
+            else:
+                positive_source = "missing"
 
-        if not positive_prompt and row.get("positive_prompt_path"):
-            prompt_path = Path(row["positive_prompt_path"])
-            if prompt_path.exists():
-                positive_prompt = prompt_path.read_text(encoding="utf-8").strip()
+        negative_prompt = str(row.get("negative_prompt", "")).strip()
+        negative_source = str(row.get("negative_prompt_source", "")).strip()
+        negative_explicit = bool(row.get("negative_prompt_explicit", False))
+        if not negative_explicit and not negative_prompt:
+            if default_negative:
+                negative_prompt = default_negative
+                negative_source = "config.generation.negative_prompt"
+            elif workflow_default_negative:
+                negative_prompt = workflow_default_negative
+                negative_source = "workflow_default.negative_prompt"
+            else:
+                negative_source = "missing"
+        elif negative_explicit and not negative_source:
+            negative_source = "prompt_pack.negative_prompt(empty)"
 
-        negative_prompt = row.get("negative_prompt_text", "").strip()
-        if not negative_prompt:
-            negative_prompt = row.get("negative_prompt", "").strip()
+        filename_prefix = str(row.get("filename_prefix", "")).strip()
+        filename_prefix_source = str(row.get("filename_prefix_source", "")).strip()
+        if filename_prefix and not filename_prefix_source:
+            filename_prefix_source = "prompt_pack.filename_prefix"
+        if not filename_prefix_source:
+            filename_prefix_source = "defer_to_config_or_runtime"
+
+        item_seed = runtime_cfg.get("seed", 42)
+        item_seed_source = "config.runtime.seed"
+        row_seed = str(row.get("seed", "")).strip()
+        if row_seed:
+            try:
+                item_seed = int(row_seed)
+                item_seed_source = str(row.get("seed_source", "prompt_pack.seed")).strip() or (
+                    "prompt_pack.seed"
+                )
+            except ValueError:
+                item_seed_source = "config.runtime.seed(fallback_from_invalid_prompt_pack.seed)"
 
         manifest["items"].append(
             {
-                "id": row.get("id", ""),
-                "subject": row.get("subject", ""),
-                "style": row.get("style", ""),
-                "attributes": row.get("attributes", ""),
+                "id": item_id,
+                "item_id": item_id,
+                "item_index": index,
+                "prompt_row_index": int(row.get("prompt_row_index", 0) or 0),
+                "prompt_row_id": str(row.get("prompt_row_id", row.get("id", ""))),
+                "subject": str(row.get("subject", "")),
+                "style": str(row.get("style", "")),
+                "attributes": str(row.get("attributes", "")),
                 "positive_prompt": positive_prompt,
                 "negative_prompt": negative_prompt,
+                "positive_prompt_source": positive_source,
+                "negative_prompt_source": negative_source,
+                "negative_prompt_explicit": negative_explicit,
+                "filename_prefix": filename_prefix,
+                "filename_prefix_source": filename_prefix_source,
+                "seed": int(item_seed),
+                "seed_source": item_seed_source,
+                "lora_name": str(row.get("lora_name", "")).strip(),
+                "lora_strength_model": str(row.get("lora_strength_model", "")).strip(),
+                "patched_workflow_path": "",
+                "patch_report_path": "",
             }
         )
 
@@ -120,6 +242,7 @@ def resolve_comfyui_settings(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": bool(comfyui_cfg.get("enabled", False)),
         "base_url": str(comfyui_cfg.get("base_url", "http://127.0.0.1:8188")),
+        "run_name": str(comfyui_cfg.get("run_name", "")),
         "mode": str(comfyui_cfg.get("mode", "manifest")),
         "mapping_mode": str(comfyui_cfg.get("mapping_mode", "manual_map")),
         "workflow_json": str(comfyui_cfg.get("workflow_json", "")),
@@ -136,9 +259,13 @@ def resolve_comfyui_settings(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "save_image_output_dir": str(comfyui_cfg.get("save_image_output_dir", "")),
         "output_subdir": str(generation_cfg.get("output_subdir", "outputs/placeholder")),
+        "batch_size": int(generation_cfg.get("batch_size", 1)),
+        "denoise": float(generation_cfg.get("denoise", 1.0)),
         "use_lora": use_lora,
         "lora_path": lora_path,
+        "lora_name": lora_path,
         "lora_strength": lora_strength,
+        "lora_strength_model": lora_strength,
         "use_controlnet": use_controlnet,
         "controlnet_model_name": controlnet_model_name,
         "controlnet_strength": controlnet_strength,
@@ -155,8 +282,10 @@ def resolve_comfyui_model_folders(config: dict[str, Any]) -> dict[str, Any]:
     mainline_defaults = {
         "checkpoints": str(paths_cfg.get("comfyui_checkpoints_dir", "ComfyUI/models/checkpoints")),
         "diffusion_models": "ComfyUI/models/diffusion_models",
+        "unet": "ComfyUI/models/unet",
         "vae": str(paths_cfg.get("comfyui_vae_dir", "ComfyUI/models/vae")),
         "text_encoders": "ComfyUI/models/text_encoders",
+        "clip": "ComfyUI/models/clip",
     }
     extension_defaults = {
         "clip_vision": "ComfyUI/models/clip_vision",
@@ -332,23 +461,6 @@ def suggest_mapping_from_config(
     )
 
 
-def resolve_report_output_dirs(config: dict[str, Any]) -> dict[str, str]:
-    comfyui_cfg = config.get("comfyui", {}) or {}
-    report_cfg = comfyui_cfg.get("report_output_dirs", {}) or {}
-    return {
-        "workflow_inspection": str(
-            report_cfg.get("workflow_inspection", "results/workflow_inspection")
-        ),
-        "model_resolution": str(
-            report_cfg.get("model_resolution", "results/model_resolution")
-        ),
-        "mapping_suggestions": str(
-            report_cfg.get("mapping_suggestions", "results/mapping_suggestions")
-        ),
-        "patch_reports": str(report_cfg.get("patch_reports", "results/patch_reports")),
-    }
-
-
 def infer_model_dirs_from_inspection(inspection_result: dict[str, Any]) -> dict[str, list[str]]:
     model_kinds = {
         str(item.get("model_kind", "")) for item in inspection_result.get("detected_model_files", [])
@@ -382,3 +494,85 @@ def _to_string_list(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value]
     return [str(value)]
+
+
+def _normalize_prompt_row(row: dict[str, Any], row_index: int) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    raw_id = str(row.get("id", "")).strip()
+    normalized["id"] = raw_id or str(row_index)
+    normalized["prompt_row_index"] = row_index
+    normalized["prompt_row_id"] = raw_id or str(row_index)
+    normalized["subject"] = str(row.get("subject", "")).strip()
+    normalized["style"] = str(row.get("style", "")).strip()
+    normalized["attributes"] = str(row.get("attributes", "")).strip()
+
+    positive_value, positive_alias, positive_explicit = _extract_alias(
+        row, POSITIVE_PROMPT_ALIASES
+    )
+    if positive_explicit and positive_value:
+        normalized["positive_prompt"] = positive_value
+        normalized["positive_prompt_source"] = f"prompt_pack.{positive_alias}"
+    else:
+        composed = _compose_prompt_from_parts(
+            normalized["subject"],
+            normalized["style"],
+            normalized["attributes"],
+        )
+        normalized["positive_prompt"] = composed
+        normalized["positive_prompt_source"] = (
+            "prompt_pack.composed(subject,style,attributes)" if composed else ""
+        )
+
+    negative_value, negative_alias, negative_explicit = _extract_alias(
+        row, NEGATIVE_PROMPT_ALIASES
+    )
+    normalized["negative_prompt"] = negative_value
+    normalized["negative_prompt_explicit"] = negative_explicit
+    if negative_explicit:
+        if negative_value:
+            normalized["negative_prompt_source"] = f"prompt_pack.{negative_alias}"
+        else:
+            normalized["negative_prompt_source"] = (
+                f"prompt_pack.{negative_alias}(empty)"
+            )
+    else:
+        normalized["negative_prompt_source"] = ""
+
+    filename_value, filename_alias, filename_explicit = _extract_alias(
+        row, FILENAME_PREFIX_ALIASES
+    )
+    normalized["filename_prefix"] = filename_value
+    normalized["filename_prefix_source"] = (
+        f"prompt_pack.{filename_alias}" if filename_explicit and filename_value else ""
+    )
+    normalized["lora_name"] = str(row.get("lora_name", "")).strip()
+    normalized["lora_strength_model"] = str(row.get("lora_strength_model", "")).strip()
+    seed_value, seed_alias, seed_explicit = _extract_alias(row, SEED_ALIASES)
+    normalized["seed"] = seed_value
+    normalized["seed_source"] = (
+        f"prompt_pack.{seed_alias}" if seed_explicit and seed_value else ""
+    )
+    return normalized
+
+
+def _extract_alias(
+    row: dict[str, Any], aliases: list[str]
+) -> tuple[str, str, bool]:
+    first_seen_empty_key = ""
+    for key in aliases:
+        if key in row:
+            raw = row.get(key, "")
+            value = str(raw).strip()
+            if value:
+                return (value, key, True)
+            if not first_seen_empty_key:
+                first_seen_empty_key = key
+    if first_seen_empty_key:
+        return ("", first_seen_empty_key, True)
+    return ("", "", False)
+
+
+def _compose_prompt_from_parts(subject: str, style: str, attributes: str) -> str:
+    parts = [subject.strip(), style.strip(), attributes.strip()]
+    non_empty = [part for part in parts if part]
+    return ", ".join(non_empty)

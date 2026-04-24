@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -19,8 +20,10 @@ PLACEHOLDER_WORKFLOW_ERROR = (
 COMFYUI_MODEL_DIR_KEYS = {
     "checkpoints",
     "diffusion_models",
+    "unet",
     "vae",
     "text_encoders",
+    "clip",
     "clip_vision",
     "loras",
     "controlnet",
@@ -38,6 +41,7 @@ COMFYUI_MODEL_DIR_KEYS = {
     "model_patches",
     "download_model_base",
 }
+NODE_ID_PATTERN = re.compile(r"^\d+(?::\d+)*$")
 
 # Project-level compatibility abstractions, not official ComfyUI terminology.
 MODEL_FAMILY_DEFAULT_REQUIREMENTS: dict[str, dict[str, list[str]]] = {
@@ -98,6 +102,8 @@ class WorkflowPatchParams:
     cfg: float
     sampler: str
     scheduler: str
+    batch_size: int = 1
+    denoise: float = 1.0
     filename_prefix: str | None = None
     output_dir: str | None = None
     use_lora: bool = False
@@ -286,7 +292,6 @@ def validate_node_mapping(mapping: dict[str, Any]) -> None:
 
     expected_fields: dict[str, tuple[str, ...]] = {
         "positive_prompt": ("node_id", "input_key"),
-        "negative_prompt": ("node_id", "input_key"),
         "latent_size": ("node_id", "width_key", "height_key"),
         "sampler": (
             "node_id",
@@ -311,6 +316,16 @@ def validate_node_mapping(mapping: dict[str, Any]) -> None:
         raise NodeMappingError(
             "Node mapping is missing required fields: " + ", ".join(missing)
         )
+
+    negative = required_section.get("negative_prompt", {})
+    if isinstance(negative, dict):
+        node_id = str(negative.get("node_id", "")).strip()
+        input_key = str(negative.get("input_key", "")).strip()
+        if (node_id and not input_key) or (input_key and not node_id):
+            raise NodeMappingError(
+                "Node mapping `required.negative_prompt` must provide both "
+                "`node_id` and `input_key`, or leave both empty."
+            )
 
 
 def patch_workflow(
@@ -348,19 +363,32 @@ def patch_workflow_with_report(
                 "manual_map mode requires a valid node mapping dictionary."
             )
         patched = _patch_workflow_manual(workflow, mapping, params)
+        manual_patched_fields = [
+            "positive_prompt",
+            "seed",
+            "width",
+            "height",
+            "steps",
+            "cfg",
+            "sampler",
+            "scheduler",
+        ]
+        negative_mapping = mapping.get("required", {}).get("negative_prompt", {})
+        if (
+            isinstance(negative_mapping, dict)
+            and str(negative_mapping.get("node_id", "")).strip()
+            and str(negative_mapping.get("input_key", "")).strip()
+        ):
+            manual_patched_fields.append("negative_prompt")
+        latent_mapping = mapping.get("required", {}).get("latent_size", {})
+        if str(latent_mapping.get("batch_size_key", "")).strip():
+            manual_patched_fields.append("batch_size")
+        sampler_mapping = mapping.get("required", {}).get("sampler", {})
+        if str(sampler_mapping.get("denoise_key", "")).strip():
+            manual_patched_fields.append("denoise")
         report = {
             "mapping_mode": "manual_map",
-            "patched_fields": [
-                "positive_prompt",
-                "negative_prompt",
-                "seed",
-                "width",
-                "height",
-                "steps",
-                "cfg",
-                "sampler",
-                "scheduler",
-            ],
+            "patched_fields": manual_patched_fields,
             "skipped_fields": [],
             "unresolved_fields": [],
             "missing_model_references": [],
@@ -390,13 +418,19 @@ def _patch_workflow_manual(
         params.positive_prompt,
         label="positive_prompt",
     )
-    _set_input(
-        prompt_graph,
-        required["negative_prompt"]["node_id"],
-        required["negative_prompt"]["input_key"],
-        params.negative_prompt,
-        label="negative_prompt",
-    )
+    negative_mapping = required.get("negative_prompt", {})
+    if (
+        isinstance(negative_mapping, dict)
+        and str(negative_mapping.get("node_id", "")).strip()
+        and str(negative_mapping.get("input_key", "")).strip()
+    ):
+        _set_input(
+            prompt_graph,
+            negative_mapping["node_id"],
+            negative_mapping["input_key"],
+            params.negative_prompt,
+            label="negative_prompt",
+        )
 
     latent_mapping = required["latent_size"]
     _set_input(
@@ -413,6 +447,15 @@ def _patch_workflow_manual(
         int(params.height),
         label="height",
     )
+    batch_size_key = str(latent_mapping.get("batch_size_key", "")).strip()
+    if batch_size_key:
+        _set_input(
+            prompt_graph,
+            latent_mapping["node_id"],
+            batch_size_key,
+            int(params.batch_size),
+            label="batch_size",
+        )
 
     sampler_mapping = required["sampler"]
     _set_input(
@@ -450,6 +493,15 @@ def _patch_workflow_manual(
         params.scheduler,
         label="scheduler",
     )
+    denoise_key = str(sampler_mapping.get("denoise_key", "")).strip()
+    if denoise_key:
+        _set_input(
+            prompt_graph,
+            sampler_mapping["node_id"],
+            denoise_key,
+            float(params.denoise),
+            label="denoise",
+        )
 
     _patch_save_image(prompt_graph, mapping, params)
     _patch_lora(prompt_graph, mapping, params)
@@ -542,6 +594,17 @@ def _patch_workflow_auto_detect(
         label="height",
         report=report,
     )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.latent_size",
+        node_id=str(latent.get("node_id", "")),
+        input_key=str(latent.get("batch_size_key", "")),
+        value=int(params.batch_size),
+        label="batch_size",
+        report=report,
+    )
 
     sampler = required.get("sampler", {})
     _auto_patch_required_field(
@@ -597,6 +660,17 @@ def _patch_workflow_auto_detect(
         input_key=str(sampler.get("scheduler_key", "")),
         value=params.scheduler,
         label="scheduler",
+        report=report,
+    )
+    _auto_patch_required_field(
+        prompt_graph=prompt_graph,
+        confidence=confidence,
+        override_paths=override_paths,
+        mapping_path="required.sampler",
+        node_id=str(sampler.get("node_id", "")),
+        input_key=str(sampler.get("denoise_key", "")),
+        value=float(params.denoise),
+        label="denoise",
         report=report,
     )
 
@@ -911,11 +985,11 @@ def _is_comfyui_prompt_graph(data: dict[str, Any]) -> bool:
     if not isinstance(data, dict) or not data:
         return False
 
-    digit_keys = [key for key in data.keys() if str(key).isdigit()]
-    if not digit_keys:
+    node_keys = [key for key in data.keys() if _looks_like_node_id(str(key))]
+    if not node_keys:
         return False
 
-    for key in digit_keys:
+    for key in node_keys:
         node = data[key]
         if not isinstance(node, dict):
             return False
@@ -949,3 +1023,7 @@ def _unique_items(items: list[str]) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _looks_like_node_id(value: str) -> bool:
+    return bool(NODE_ID_PATTERN.match(value))

@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -40,7 +43,6 @@ from src.generation.workflow_runner import (  # noqa: E402
     load_yaml_config,
     resolve_comfyui_settings,
     resolve_models_from_config,
-    resolve_report_output_dirs,
     save_manifest_json,
     suggest_mapping_from_config,
 )
@@ -55,13 +57,13 @@ def parse_args() -> argparse.Namespace:
         "--prompt-pack",
         type=str,
         default="",
-        help="prompt_pack.csv path (required for manifest/patch/submit/auto_patch modes).",
+        help="Optional prompt_pack.csv path.",
     )
     parser.add_argument(
         "--output-json",
         type=str,
-        default="results/run_manifest.json",
-        help="Manifest output JSON path.",
+        default="",
+        help="Optional manifest output path. Default: results/runs/<run_name>/run_manifest.json",
     )
     parser.add_argument(
         "--mode",
@@ -75,7 +77,6 @@ def parse_args() -> argparse.Namespace:
             "suggest_mapping",
             "auto_patch_workflow",
             "workflow_import_pipeline",
-            "prepare_workflow_import",
         ],
         default="manifest",
         help="Run mode.",
@@ -100,12 +101,6 @@ def parse_args() -> argparse.Namespace:
         help="Mapping mode override for patch_workflow: manual_map / auto_detect.",
     )
     parser.add_argument(
-        "--patched-output-dir",
-        type=str,
-        default="",
-        help="Override patched workflow output directory.",
-    )
-    parser.add_argument(
         "--comfyui-url",
         type=str,
         default="",
@@ -127,7 +122,7 @@ def parse_args() -> argparse.Namespace:
         "--run-name",
         type=str,
         default="",
-        help="统一 run 目录名（用于 workflow_import_pipeline）。",
+        help="Optional run name override.",
     )
     return parser.parse_args()
 
@@ -140,12 +135,50 @@ def _resolve_required_path(cli_value: str, config_value: str, label: str) -> Pat
 
 
 def _build_item_prefix(item: dict[str, Any], index: int) -> str:
-    item_id = str(item.get("id", "")).strip()
-    subject = str(item.get("subject", f"item_{index:03d}")).strip()
-    safe_subject = sanitize_filename(subject) or f"item_{index:03d}"
+    item_id = str(item.get("item_id", item.get("id", ""))).strip()
     if item_id.isdigit():
-        return f"{int(item_id):03d}_{safe_subject}"
-    return f"item_{index:03d}_{safe_subject}"
+        return f"item_{int(item_id):04d}"
+    safe_item_id = sanitize_filename(item_id) or f"{index:04d}"
+    return f"item_{index:04d}_{safe_item_id}"
+
+
+def _item_tag(index: int) -> str:
+    return f"item_{index:04d}"
+
+
+def _item_workflow_filename(index: int) -> str:
+    return f"{_item_tag(index)}_patched_workflow.json"
+
+
+def _item_patch_report_filename(index: int) -> str:
+    return f"{_item_tag(index)}_patch_report.json"
+
+
+def _build_default_prompt_rows(config: dict[str, Any]) -> list[dict[str, str]]:
+    generation = config.get("generation", {}) or {}
+    return [
+        {
+            "id": "1",
+            "prompt_row_index": 1,
+            "prompt_row_id": "1",
+            "subject": str(generation.get("subject", "smoke_item")),
+            "style": "",
+            "attributes": "",
+            "positive_prompt": str(generation.get("prompt", "")).strip(),
+            "positive_prompt_source": "config.generation.prompt",
+            "negative_prompt": str(generation.get("negative_prompt", "")).strip(),
+            "negative_prompt_source": "config.generation.negative_prompt",
+            "negative_prompt_explicit": True,
+            "filename_prefix": str(generation.get("filename_prefix", "")).strip(),
+            "filename_prefix_source": "config.generation.filename_prefix",
+        }
+    ]
+
+
+def _resolve_prompt_rows(args: argparse.Namespace, config: dict[str, Any]) -> list[dict[str, str]]:
+    if args.prompt_pack.strip():
+        return load_prompt_pack_csv(Path(args.prompt_pack.strip()))
+    return _build_default_prompt_rows(config)
 
 
 def _build_patch_params(
@@ -159,21 +192,41 @@ def _build_patch_params(
         raw = str(comfy_settings.get("save_image_output_dir", "")).strip()
         output_dir = raw or None
 
+    filename_prefix = str(item.get("filename_prefix", "")).strip()
+    if not filename_prefix:
+        base_prefix = str(manifest.get("filename_prefix", "")).strip()
+        item_prefix = _build_item_prefix(item, index)
+        filename_prefix = f"{base_prefix}/{item_prefix}" if base_prefix else item_prefix
+
+    lora_path = str(item.get("lora_name", "")).strip() or str(
+        comfy_settings.get("lora_path", "")
+    ).strip()
+    lora_strength_raw = item.get("lora_strength_model", "")
+    if str(lora_strength_raw).strip():
+        try:
+            lora_strength = float(lora_strength_raw)
+        except ValueError:
+            lora_strength = float(comfy_settings.get("lora_strength", 1.0))
+    else:
+        lora_strength = float(comfy_settings.get("lora_strength", 1.0))
+
     return WorkflowPatchParams(
         positive_prompt=str(item.get("positive_prompt", "")),
         negative_prompt=str(item.get("negative_prompt", "")),
-        seed=int(manifest.get("seed", 42)),
+        seed=int(item.get("seed", manifest.get("seed", 42))),
         width=int(manifest.get("width", 1024)),
         height=int(manifest.get("height", 1024)),
+        batch_size=int(manifest.get("batch_size", comfy_settings.get("batch_size", 1))),
         steps=int(manifest.get("num_inference_steps", 30)),
         cfg=float(manifest.get("guidance_scale", 7.0)),
         sampler=str(manifest.get("sampler", "euler")),
         scheduler=str(manifest.get("scheduler", "normal")),
-        filename_prefix=_build_item_prefix(item, index),
+        denoise=float(manifest.get("denoise", comfy_settings.get("denoise", 1.0))),
+        filename_prefix=filename_prefix,
         output_dir=output_dir,
         use_lora=bool(comfy_settings.get("use_lora", False)),
-        lora_path=str(comfy_settings.get("lora_path", "")),
-        lora_strength=float(comfy_settings.get("lora_strength", 1.0)),
+        lora_path=lora_path,
+        lora_strength=lora_strength,
         use_controlnet=bool(comfy_settings.get("use_controlnet", False)),
         controlnet_model_name=str(comfy_settings.get("controlnet_model_name", "")),
         controlnet_strength=float(comfy_settings.get("controlnet_strength", 0.8)),
@@ -196,6 +249,50 @@ def _load_optional_mapping(path: Path | None) -> dict[str, Any] | None:
     return load_node_mapping(path)
 
 
+def _get_input_value(
+    workflow: dict[str, Any],
+    node_id: str,
+    input_key: str,
+) -> Any:
+    graph = _extract_prompt_graph(workflow)
+    node = graph.get(str(node_id))
+    if not isinstance(node, dict):
+        return None
+    inputs = node.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    return inputs.get(str(input_key))
+
+
+def _extract_workflow_defaults(
+    *,
+    workflow: dict[str, Any],
+    mapping: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(mapping, dict):
+        return {}
+
+    required = mapping.get("required", {}) or {}
+    defaults: dict[str, Any] = {}
+
+    positive = required.get("positive_prompt", {}) or {}
+    positive_node = str(positive.get("node_id", "")).strip()
+    positive_key = str(positive.get("input_key", "")).strip()
+    if positive_node and positive_key:
+        value = _get_input_value(workflow, positive_node, positive_key)
+        if isinstance(value, str):
+            defaults["positive_prompt"] = value
+
+    negative = required.get("negative_prompt", {}) or {}
+    negative_node = str(negative.get("node_id", "")).strip()
+    negative_key = str(negative.get("input_key", "")).strip()
+    if negative_node and negative_key:
+        value = _get_input_value(workflow, negative_node, negative_key)
+        if isinstance(value, str):
+            defaults["negative_prompt"] = value
+    return defaults
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -208,11 +305,15 @@ def _resolve_run_dir(
     workflow_path: Path | None = None,
 ) -> Path:
     base_root = Path("results") / "runs"
+    comfy_settings = resolve_comfyui_settings(config)
+    config_run_name = str(comfy_settings.get("run_name", "")).strip()
+
     if args.run_name.strip():
         run_name = sanitize_filename(args.run_name.strip())
+    elif config_run_name:
+        run_name = sanitize_filename(config_run_name)
     else:
         stem = workflow_path.stem if workflow_path is not None else "workflow"
-        comfy_settings = resolve_comfyui_settings(config)
         fallback = str(comfy_settings.get("mode", "pipeline")).strip() or "pipeline"
         run_name = sanitize_filename(
             f"{stem}_{fallback}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -221,6 +322,13 @@ def _resolve_run_dir(
     run_dir = base_root / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def _resolve_manifest_output_path(args: argparse.Namespace, run_dir: Path) -> Path:
+    explicit = str(args.output_json or "").strip()
+    if explicit:
+        return Path(explicit)
+    return run_dir / "run_manifest.json"
 
 
 def _render_patch_report_markdown(
@@ -259,6 +367,31 @@ def _render_patch_report_markdown(
     else:
         lines.append("- None")
 
+    lines.append("")
+    lines.append("## Unsupported Fields")
+    unsupported = report.get("unsupported_fields", [])
+    if unsupported:
+        lines.extend([f"- {value}" for value in unsupported])
+    else:
+        lines.append("- None")
+
+    lines.append("")
+    lines.append("## Fallback Fields")
+    fallback = report.get("fallback_fields", [])
+    if fallback:
+        lines.extend([f"- {value}" for value in fallback])
+    else:
+        lines.append("- None")
+
+    lines.append("")
+    lines.append("## Value Sources")
+    value_sources = report.get("value_sources", {})
+    if isinstance(value_sources, dict) and value_sources:
+        for key in sorted(value_sources.keys()):
+            lines.append(f"- `{key}`: `{value_sources[key]}`")
+    else:
+        lines.append("- None")
+
     custom_notes = report.get("custom_node_notes", [])
     lines.append("")
     lines.append("## Custom Node Notes")
@@ -267,6 +400,42 @@ def _render_patch_report_markdown(
     else:
         lines.append("- None")
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output_path
+
+
+def _render_batch_patch_report_markdown(
+    *,
+    manifest: dict[str, Any],
+    output_path: Path,
+) -> Path:
+    items = manifest.get("items", [])
+    lines = [
+        "# Batch Patch Report",
+        "",
+        f"- run_name: `{manifest.get('run_name', '')}`",
+        f"- total_items: `{len(items)}`",
+        "",
+        "## Items",
+    ]
+    if not items:
+        lines.append("- None")
+    else:
+        for item in items:
+            item_index = int(item.get("item_index", 0) or 0)
+            item_id = str(item.get("item_id", item.get("id", ""))).strip() or str(item_index)
+            status = str(item.get("patch_status", "unknown"))
+            lines.append(
+                (
+                    f"- item `{item_index}` (id `{item_id}`): "
+                    f"status=`{status}`, filename_prefix=`{item.get('filename_prefix', '')}`"
+                )
+            )
+            lines.append(f"  prompt: `{item.get('positive_prompt', '')}`")
+            lines.append(
+                f"  patched_workflow_path: `{item.get('patched_workflow_path', '') or 'N/A'}`"
+            )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output_path
@@ -318,18 +487,26 @@ def _resolve_mapping_path(
     return Path(value)
 
 
-def _require_prompt_pack(args: argparse.Namespace) -> Path:
-    value = args.prompt_pack.strip()
-    if not value:
-        raise ValueError(
-            "--prompt-pack is required for manifest/patch_workflow/submit/auto_patch_workflow/workflow_import_pipeline."
+def _is_strict_model_check(config: dict[str, Any]) -> bool:
+    comfy = config.get("comfyui", {}) or {}
+    return bool(comfy.get("strict_model_dir_check", False))
+
+
+def _assert_model_resolution_if_strict(config: dict[str, Any], report: dict[str, Any]) -> None:
+    if not _is_strict_model_check(config):
+        return
+    summary = report.get("resolution", {}).get("summary", {})
+    missing = int(summary.get("missing_count", 0))
+    if missing > 0:
+        raise RuntimeError(
+            f"strict_model_dir_check=true and {missing} model references are unresolved."
         )
-    return Path(value)
 
 
 def _build_manifest_if_needed(
     args: argparse.Namespace,
     config: dict[str, Any],
+    run_dir: Path,
     force: bool = False,
 ) -> dict[str, Any] | None:
     if args.mode not in {
@@ -338,26 +515,45 @@ def _build_manifest_if_needed(
         "submit",
         "auto_patch_workflow",
         "workflow_import_pipeline",
-        "prepare_workflow_import",
     } and not force:
         return None
-    prompt_pack_path = _require_prompt_pack(args)
-    prompt_rows = load_prompt_pack_csv(prompt_pack_path)
-    manifest = build_run_manifest(config, prompt_rows)
-    save_manifest_json(manifest, Path(args.output_json))
-    print(f"[OK] Run manifest created: {args.output_json}")
+    prompt_rows = _resolve_prompt_rows(args, config)
+    workflow_defaults: dict[str, Any] = {}
+    workflow_path_text = ""
+    try:
+        workflow_path = _resolve_workflow_path(args, config)
+        workflow_path_text = str(workflow_path.as_posix())
+        mapping_path = _resolve_mapping_path(args, config, required=False)
+        mapping = _load_optional_mapping(mapping_path)
+        workflow_defaults = _extract_workflow_defaults(
+            workflow=load_workflow_json(workflow_path),
+            mapping=mapping,
+        )
+    except Exception:
+        workflow_defaults = {}
+
+    manifest = build_run_manifest(
+        config,
+        prompt_rows,
+        config_path=args.config,
+        prompt_pack_path=str(args.prompt_pack or "").strip(),
+        workflow_path=workflow_path_text,
+        workflow_defaults=workflow_defaults,
+    )
+    manifest["run_name"] = run_dir.name
+    output_path = _resolve_manifest_output_path(args, run_dir)
+    save_manifest_json(manifest, output_path)
+    print(f"[OK] Run manifest created: {output_path}")
     print(f"[OK] Number of generation items: {len(manifest['items'])}")
     return manifest
 
 
 def run_inspect_workflow(args: argparse.Namespace, config: dict[str, Any]) -> None:
     workflow_path = _resolve_workflow_path(args, config)
-    report_dirs = resolve_report_output_dirs(config)
-    output_dir = Path(report_dirs["workflow_inspection"])
+    run_dir = _resolve_run_dir(args=args, config=config, workflow_path=workflow_path)
     inspection = inspect_workflow_path(workflow_path)
-    stem = workflow_path.stem
-    json_path = output_dir / f"{stem}_inspection.json"
-    md_path = output_dir / f"{stem}_inspection.md"
+    json_path = run_dir / "workflow_inspection.json"
+    md_path = run_dir / "workflow_inspection.md"
     save_inspection_report_json(inspection, json_path)
     save_inspection_report_markdown(inspection, md_path)
     print(f"[OK] Workflow inspected: {workflow_path}")
@@ -367,12 +563,12 @@ def run_inspect_workflow(args: argparse.Namespace, config: dict[str, Any]) -> No
 
 def run_resolve_models(args: argparse.Namespace, config: dict[str, Any]) -> None:
     workflow_path = _resolve_workflow_path(args, config)
+    run_dir = _resolve_run_dir(args=args, config=config, workflow_path=workflow_path)
     inspection = inspect_workflow_path(workflow_path)
     root_override = args.comfyui_root.strip() or None
     report = resolve_models_from_config(config, inspection, comfyui_root=root_override)
-    report_dirs = resolve_report_output_dirs(config)
-    output_dir = Path(report_dirs["model_resolution"])
-    output_path = output_dir / f"{workflow_path.stem}_model_resolution.json"
+    _assert_model_resolution_if_strict(config, report)
+    output_path = run_dir / "model_resolution.json"
     _write_json(output_path, report)
     summary = report.get("resolution", {}).get("summary", {})
     print(f"[OK] Model resolution completed for: {workflow_path}")
@@ -390,18 +586,17 @@ def run_resolve_models(args: argparse.Namespace, config: dict[str, Any]) -> None
 
 def run_suggest_mapping(args: argparse.Namespace, config: dict[str, Any]) -> None:
     workflow_path = _resolve_workflow_path(args, config)
+    run_dir = _resolve_run_dir(args=args, config=config, workflow_path=workflow_path)
     inspection = inspect_workflow_path(workflow_path)
     mapping_path = _resolve_mapping_path(args, config, required=False)
     existing_mapping = _load_optional_mapping(mapping_path)
     suggestion = suggest_mapping_from_config(
         config=config, inspection_result=inspection, existing_mapping=existing_mapping
     )
-    report_dirs = resolve_report_output_dirs(config)
-    output_dir = Path(report_dirs["mapping_suggestions"])
-    output_yaml = output_dir / f"{workflow_path.stem}_suggested_node_map.yaml"
-    output_json = output_dir / f"{workflow_path.stem}_mapping_suggestion_report.json"
-    output_diff_md = output_dir / f"{workflow_path.stem}_mapping_diff.md"
-    output_manual_review = output_dir / f"{workflow_path.stem}_mapping_manual_review.yaml"
+    output_yaml = run_dir / "mapping_suggestion.yaml"
+    output_json = run_dir / "mapping_suggestion_report.json"
+    output_diff_md = run_dir / "mapping_diff.md"
+    output_manual_review = run_dir / "mapping_manual_review.yaml"
     save_mapping_yaml(suggestion["mapping"], output_yaml)
     save_mapping_diff_markdown(suggestion.get("diff_vs_existing", {}), output_diff_md)
     save_mapping_manual_review_yaml(suggestion, output_manual_review)
@@ -424,11 +619,10 @@ def run_workflow_import_pipeline(args: argparse.Namespace, config: dict[str, Any
     model_report = resolve_models_from_config(
         config=config, inspection_result=inspection, comfyui_root=root_override
     )
+    _assert_model_resolution_if_strict(config, model_report)
     _write_json(run_dir / "model_resolution.json", model_report)
 
-    # Pipeline mode defaults to pure auto-detect; only apply manual override
-    # when user explicitly passes --node-map.
-    mapping_path = Path(args.node_map.strip()) if args.node_map.strip() else None
+    mapping_path = _resolve_mapping_path(args, config, required=False)
     existing_mapping = _load_optional_mapping(mapping_path)
     suggestion = suggest_mapping_from_config(
         config=config,
@@ -441,38 +635,35 @@ def run_workflow_import_pipeline(args: argparse.Namespace, config: dict[str, Any
     )
     save_mapping_manual_review_yaml(suggestion, run_dir / "mapping_manual_review.yaml")
 
-    prompt_pack_path = _require_prompt_pack(args)
-    prompt_rows = load_prompt_pack_csv(prompt_pack_path)
-    manifest = build_run_manifest(config, prompt_rows)
+    prompt_rows = _resolve_prompt_rows(args, config)
+    workflow_defaults = _extract_workflow_defaults(
+        workflow=load_workflow_json(workflow_path),
+        mapping=suggestion.get("mapping"),
+    )
+    manifest = build_run_manifest(
+        config,
+        prompt_rows,
+        config_path=args.config,
+        prompt_pack_path=str(args.prompt_pack or "").strip(),
+        workflow_path=str(workflow_path.as_posix()),
+        workflow_defaults=workflow_defaults,
+    )
+    manifest["run_name"] = run_dir.name
     save_manifest_json(manifest, run_dir / "run_manifest.json")
 
-    items = manifest.get("items", [])
-    if not items:
-        raise ValueError("prompt_pack 为空，无法执行 auto patch。")
-
-    comfy_settings = resolve_comfyui_settings(config)
-    params = _build_patch_params(
+    _patch_workflows_common(
+        args=args,
+        config=config,
         manifest=manifest,
-        item=items[0],
-        index=1,
-        comfy_settings=comfy_settings,
-    )
-    base_workflow = load_workflow_json(workflow_path)
-    patched_workflow, patch_report = patch_workflow_with_report(
-        workflow=base_workflow,
-        mapping=suggestion["mapping"],
-        params=params,
-        mapping_mode="auto_detect",
-    )
-    save_workflow_json(patched_workflow, run_dir / "patched_workflow.json")
-    _write_json(run_dir / "patch_report.json", patch_report)
-    _render_patch_report_markdown(
-        item={"item_id": items[0].get("id", 1), "subject": items[0].get("subject", "")},
-        report=patch_report,
-        output_path=run_dir / "patch_report.md",
+        run_dir=run_dir,
+        submit=False,
+        force_auto_mode=True,
+        mapping_override=suggestion.get("mapping"),
+        mapping_mode_override="auto_detect",
+        workflow_path_override=workflow_path,
     )
 
-    print(f"[OK] workflow-first pipeline 已完成，输出目录: {run_dir}")
+    print(f"[OK] workflow-first pipeline completed. Output directory: {run_dir}")
 
 
 def _resolve_mapping_mode(args: argparse.Namespace, config: dict[str, Any], auto: bool = False) -> str:
@@ -486,104 +677,563 @@ def _resolve_mapping_mode(args: argparse.Namespace, config: dict[str, Any], auto
     return value
 
 
+def _extract_submit_error(exc: Exception) -> tuple[str, Any]:
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = {"raw_text": exc.response.text}
+        if isinstance(payload, dict):
+            return str(payload.get("error", exc)), payload.get("node_errors", {})
+        return str(exc), {}
+    return str(exc), {}
+
+
+def _is_mapping_field_supported(mapping: dict[str, Any] | None, field: str) -> bool:
+    if not isinstance(mapping, dict):
+        return False
+    required = mapping.get("required", {}) or {}
+    if field == "negative_prompt":
+        neg = required.get("negative_prompt", {}) or {}
+        return bool(str(neg.get("node_id", "")).strip() and str(neg.get("input_key", "")).strip())
+    if field == "positive_prompt":
+        pos = required.get("positive_prompt", {}) or {}
+        return bool(str(pos.get("node_id", "")).strip() and str(pos.get("input_key", "")).strip())
+    return False
+
+
+def _build_value_sources(manifest: dict[str, Any], item: dict[str, Any]) -> dict[str, str]:
+    param_sources = manifest.get("parameter_sources", {}) or {}
+    return {
+        "positive_prompt": str(item.get("positive_prompt_source", "unknown")),
+        "negative_prompt": str(item.get("negative_prompt_source", "unknown")),
+        "filename_prefix": str(item.get("filename_prefix_source", "defer_to_runtime")),
+        "seed": str(item.get("seed_source", param_sources.get("seed", "config.runtime.seed"))),
+        "width": str(param_sources.get("width", "config.generation.width")),
+        "height": str(param_sources.get("height", "config.generation.height")),
+        "batch_size": str(param_sources.get("batch_size", "config.generation.batch_size")),
+        "steps": str(
+            param_sources.get("num_inference_steps", "config.generation.num_inference_steps")
+        ),
+        "cfg": str(param_sources.get("guidance_scale", "config.generation.guidance_scale")),
+        "sampler_name": str(param_sources.get("sampler", "config.generation.sampler")),
+        "scheduler": str(param_sources.get("scheduler", "config.generation.scheduler")),
+        "denoise": str(param_sources.get("denoise", "config.generation.denoise")),
+        "lora_name": (
+            "prompt_pack.lora_name"
+            if str(item.get("lora_name", "")).strip()
+            else "config.lora.path|model.lora_path"
+        ),
+        "lora_strength_model": (
+            "prompt_pack.lora_strength_model"
+            if str(item.get("lora_strength_model", "")).strip()
+            else "config.lora.strength|model.lora_strength"
+        ),
+    }
+
+
+def _build_fallback_fields(value_sources: dict[str, str]) -> list[str]:
+    fallback_fields: list[str] = []
+    fallback_markers = ("config.", "workflow_default.", "defer_", "prompt_pack.composed")
+    for key, value in value_sources.items():
+        if any(marker in value for marker in fallback_markers):
+            fallback_fields.append(f"{key} <- {value}")
+    return fallback_fields
+
+
+def _build_unsupported_fields(
+    *,
+    mapping: dict[str, Any] | None,
+    params: WorkflowPatchParams,
+) -> list[str]:
+    if not isinstance(mapping, dict):
+        return []
+    unsupported: list[str] = []
+    if params.negative_prompt.strip() and not _is_mapping_field_supported(mapping, "negative_prompt"):
+        unsupported.append(
+            "negative_prompt: workflow does not provide mapped negative prompt node/input; ignored."
+        )
+    return unsupported
+
+
+def _resolve_manifest_items(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    items = manifest.get("items", [])
+    if not isinstance(items, list):
+        return []
+    for index, item in enumerate(items, start=1):
+        item["item_index"] = int(item.get("item_index", index) or index)
+        item_id = str(item.get("item_id", item.get("id", ""))).strip() or str(index)
+        item["item_id"] = item_id
+        item["id"] = str(item.get("id", item_id)).strip() or item_id
+        if str(item.get("seed", "")).strip():
+            try:
+                item["seed"] = int(item.get("seed"))
+            except (TypeError, ValueError):
+                item["seed"] = int(manifest.get("seed", 42))
+        else:
+            item["seed"] = int(manifest.get("seed", 42))
+        item.setdefault("seed_source", "config.runtime.seed")
+        item.setdefault("patched_workflow_path", "")
+        item.setdefault("patch_report_path", "")
+        item.setdefault("patch_status", "pending")
+    return items
+
+
+def _resolve_existing_path(path_text: str, run_dir: Path) -> Path | None:
+    value = str(path_text).strip()
+    if not value:
+        return None
+    candidate = Path(value)
+    if candidate.exists():
+        return candidate
+    joined = run_dir / value
+    if joined.exists():
+        return joined
+    return None
+
+
+def _write_submit_results(
+    *,
+    run_dir: Path,
+    server_url: str,
+    results: list[dict[str, Any]],
+    used_existing_patched_workflows: bool,
+) -> Path:
+    submit_log_path = run_dir / "comfyui_submit_results.json"
+    _write_json(
+        submit_log_path,
+        {
+            "submit_time": datetime.now().isoformat(),
+            "server_url": server_url,
+            "run_name": run_dir.name,
+            "total_items": len(results),
+            "submitted_items": len([row for row in results if bool(row.get("success"))]),
+            "failed_items": len([row for row in results if not bool(row.get("success"))]),
+            "used_existing_patched_workflows": used_existing_patched_workflows,
+            "results": results,
+        },
+    )
+    return submit_log_path
+
+
+def _load_existing_patched_entries(
+    *,
+    run_dir: Path,
+    manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    items = _resolve_manifest_items(manifest)
+    total_items = len(items)
+
+    patched_dir = run_dir / "patched_workflows"
+    batch_files: dict[int, Path] = {}
+    if patched_dir.exists():
+        for path in sorted(patched_dir.glob("item_*_patched_workflow.json")):
+            match = re.match(r"item_(\d+)_patched_workflow\.json$", path.name)
+            if match:
+                batch_files[int(match.group(1))] = path
+
+    if batch_files:
+        entries: list[dict[str, Any]] = []
+        missing: list[int] = []
+        for index, item in enumerate(items, start=1):
+            manifest_path = _resolve_existing_path(str(item.get("patched_workflow_path", "")), run_dir)
+            workflow_path = batch_files.get(index) or manifest_path
+            if workflow_path is None or not workflow_path.exists():
+                missing.append(index)
+                continue
+            entries.append(
+                {
+                    "item_index": index,
+                    "item_id": str(item.get("item_id", index)),
+                    "subject": item.get("subject", ""),
+                    "positive_prompt": item.get("positive_prompt", ""),
+                    "filename_prefix": item.get("filename_prefix", ""),
+                    "workflow_path": workflow_path,
+                }
+            )
+        if missing:
+            print(
+                "[WARN] Incomplete batch patched workflows detected. "
+                f"Missing item indexes: {missing}"
+            )
+            raise RuntimeError(
+                "Manifest contains multiple items, but patched workflows are incomplete."
+            )
+        return entries
+
+    index_path = run_dir / "patched_workflow_index.json"
+    if index_path.exists():
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            index_items = payload.get("items", [])
+            entries = []
+            for index, item in enumerate(items, start=1):
+                if index > len(index_items):
+                    break
+                row = index_items[index - 1]
+                workflow_path = _resolve_existing_path(str(row.get("patched_workflow", "")), run_dir)
+                if workflow_path is None:
+                    continue
+                entries.append(
+                    {
+                        "item_index": index,
+                        "item_id": str(item.get("item_id", index)),
+                        "subject": item.get("subject", ""),
+                        "positive_prompt": item.get("positive_prompt", ""),
+                        "filename_prefix": item.get("filename_prefix", ""),
+                        "workflow_path": workflow_path,
+                    }
+                )
+            if entries:
+                if total_items > len(entries):
+                    print(
+                        "[WARN] Incomplete patched_workflow_index.json entries for batch submit. "
+                        f"manifest_items={total_items}, indexed={len(entries)}"
+                    )
+                    raise RuntimeError(
+                        "Manifest contains multiple items, but patched workflow index is incomplete."
+                    )
+                return entries
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
+    single = run_dir / "patched_workflow.json"
+    if single.exists():
+        if total_items > 1:
+            print(
+                "[WARN] Using legacy single patched_workflow.json; batch submit is not available for this run."
+            )
+            raise RuntimeError(
+                "Manifest contains multiple items but only legacy single patched_workflow.json exists."
+            )
+        item = items[0] if items else {"item_id": "1", "subject": "", "positive_prompt": "", "filename_prefix": ""}
+        print(
+            "[WARN] Using legacy single patched_workflow.json; batch submit is not available for this run."
+        )
+        return [
+            {
+                "item_index": int(item.get("item_index", 1) or 1),
+                "item_id": str(item.get("item_id", "1")),
+                "subject": item.get("subject", ""),
+                "positive_prompt": item.get("positive_prompt", ""),
+                "filename_prefix": item.get("filename_prefix", ""),
+                "workflow_path": single,
+            }
+        ]
+    return []
+
+
 def _patch_workflows_common(
     *,
     args: argparse.Namespace,
     config: dict[str, Any],
     manifest: dict[str, Any],
+    run_dir: Path,
     submit: bool = False,
     force_auto_mode: bool = False,
+    mapping_override: dict[str, Any] | None = None,
+    mapping_mode_override: str | None = None,
+    workflow_path_override: Path | None = None,
 ) -> None:
     comfy_settings = resolve_comfyui_settings(config)
-    workflow_path = _resolve_workflow_path(args, config)
-    mapping_mode = _resolve_mapping_mode(args, config, auto=force_auto_mode)
-    if mapping_mode == "manual_map":
-        mapping_path = _resolve_mapping_path(args, config, required=True)
-    else:
-        # auto_detect mode only applies manual mapping as explicit override from CLI.
-        mapping_path = Path(args.node_map.strip()) if args.node_map.strip() else None
-    mapping = _load_optional_mapping(mapping_path)
+    manifest["run_name"] = run_dir.name
+    items = _resolve_manifest_items(manifest)
+    if not items:
+        raise ValueError("Prompt rows are empty; cannot patch or submit.")
 
-    patched_output_dir = Path(
-        args.patched_output_dir.strip()
-        or str(comfy_settings.get("save_patched_workflows_dir", "results/patched_workflows"))
-    )
-    report_dirs = resolve_report_output_dirs(config)
-    patch_report_dir = Path(report_dirs["patch_reports"])
+    patched_output_dir = run_dir / "patched_workflows"
+    patch_report_dir = run_dir / "patch_reports"
+    patched_output_dir.mkdir(parents=True, exist_ok=True)
+    patch_report_dir.mkdir(parents=True, exist_ok=True)
 
-    base_workflow = load_workflow_json(workflow_path)
     index_rows: list[dict[str, Any]] = []
-    submit_results: list[dict[str, Any]] = []
+    submit_items: list[dict[str, Any]] = []
 
     client: ComfyUIClient | None = None
+    comfyui_url = ""
     if submit:
-        print("[INFO] Submit mode is experimental and best suited for smoke tests.")
         comfyui_url = args.comfyui_url.strip() or str(
             comfy_settings.get("base_url", "http://127.0.0.1:8188")
         )
         client = ComfyUIClient(base_url=comfyui_url)
 
-    for index, item in enumerate(manifest.get("items", []), start=1):
+    if submit and client is not None:
+        existing_entries = _load_existing_patched_entries(run_dir=run_dir, manifest=manifest)
+        if existing_entries:
+            print(
+                "[INFO] Submit mode will use existing patched workflow files from current run "
+                f"directory: {run_dir}"
+            )
+            total_existing = len(existing_entries)
+            for position, entry in enumerate(existing_entries, start=1):
+                workflow_to_submit = load_workflow_json(entry["workflow_path"])
+                item_index = int(entry.get("item_index", position) or position)
+                item_id = str(entry.get("item_id", item_index))
+                subject = str(entry.get("subject", ""))
+                try:
+                    response = client.submit_prompt(
+                        _extract_prompt_graph(workflow_to_submit),
+                        client_id=args.client_id.strip() or None,
+                    )
+                    prompt_id = str(response.get("prompt_id", "")).strip()
+                    if prompt_id:
+                        print(
+                            f"[OK] Submit success for item {position}/{total_existing}, prompt_id={prompt_id}"
+                        )
+                    else:
+                        print(
+                            f"[WARN] Submit returned without prompt_id for item {position}/{total_existing}"
+                        )
+                    submit_items.append(
+                        {
+                            "item_index": item_index,
+                            "item_id": item_id,
+                            "patched_workflow_path": str(
+                                Path(entry["workflow_path"]).as_posix()
+                            ),
+                            "positive_prompt": str(entry.get("positive_prompt", "")),
+                            "filename_prefix": str(entry.get("filename_prefix", "")),
+                            "prompt_id": prompt_id,
+                            "success": True,
+                            "subject": subject,
+                            "response": response,
+                        }
+                    )
+                except Exception as exc:
+                    error, node_errors = _extract_submit_error(exc)
+                    print(f"[ERROR] Submit failed for item {position}/{total_existing}: {error}")
+                    if node_errors:
+                        print(f"[ERROR] node_errors: {json.dumps(node_errors, ensure_ascii=False)}")
+                    submit_items.append(
+                        {
+                            "item_index": item_index,
+                            "item_id": item_id,
+                            "patched_workflow_path": str(
+                                Path(entry["workflow_path"]).as_posix()
+                            ),
+                            "positive_prompt": str(entry.get("positive_prompt", "")),
+                            "filename_prefix": str(entry.get("filename_prefix", "")),
+                            "prompt_id": "",
+                            "success": False,
+                            "error": error,
+                            "node_errors": node_errors,
+                            "subject": subject,
+                        }
+                    )
+
+            submit_log_path = _write_submit_results(
+                run_dir=run_dir,
+                server_url=comfyui_url,
+                results=submit_items,
+                used_existing_patched_workflows=True,
+            )
+            for entry in existing_entries:
+                item_index = int(entry.get("item_index", 0) or 0)
+                if item_index <= 0 or item_index > len(items):
+                    continue
+                manifest_item = items[item_index - 1]
+                workflow_path = Path(entry["workflow_path"])
+                manifest_item["patched_workflow_path"] = str(workflow_path.as_posix())
+                report_path = patch_report_dir / _item_patch_report_filename(item_index)
+                manifest_item["patch_report_path"] = (
+                    str(report_path.as_posix()) if report_path.exists() else ""
+                )
+                manifest_item["patch_status"] = "success"
+                manifest_item["patch_error"] = ""
+            save_manifest_json(manifest, run_dir / "run_manifest.json")
+            print(f"[OK] Submit results saved to: {submit_log_path}")
+            failed = [item for item in submit_items if not bool(item.get("success"))]
+            if failed:
+                raise RuntimeError(
+                    "One or more submit requests failed. Check `comfyui_submit_results.json`."
+                )
+            return
+
+    workflow_path = workflow_path_override or _resolve_workflow_path(args, config)
+    mapping_mode = (
+        str(mapping_mode_override).strip()
+        if str(mapping_mode_override or "").strip()
+        else _resolve_mapping_mode(args, config, auto=force_auto_mode)
+    )
+    if mapping_override is not None:
+        mapping = mapping_override
+    else:
+        if mapping_mode == "manual_map":
+            mapping_path = _resolve_mapping_path(args, config, required=True)
+        else:
+            mapping_path = Path(args.node_map.strip()) if args.node_map.strip() else None
+        mapping = _load_optional_mapping(mapping_path)
+
+    base_workflow = load_workflow_json(workflow_path)
+
+    for index, item in enumerate(items, start=1):
         params = _build_patch_params(manifest, item, index, comfy_settings)
-        patched_workflow, patch_report = patch_workflow_with_report(
-            workflow=base_workflow,
-            mapping=mapping,
-            params=params,
-            mapping_mode=mapping_mode,
-        )
+        item["filename_prefix"] = params.filename_prefix
+        if not str(item.get("filename_prefix_source", "")).strip():
+            item["filename_prefix_source"] = "config.generation.filename_prefix+item_index"
+        item["seed"] = int(params.seed)
+        output_path = patched_output_dir / _item_workflow_filename(index)
+        report_json = patch_report_dir / _item_patch_report_filename(index)
+        report_md = patch_report_dir / f"{_item_tag(index)}_patch_report.md"
+        item_id = str(item.get("item_id", item.get("id", index)))
 
-        filename = f"{params.filename_prefix}.json"
-        output_path = patched_output_dir / filename
-        save_workflow_json(patched_workflow, output_path)
+        try:
+            patched_workflow, patch_report = patch_workflow_with_report(
+                workflow=base_workflow,
+                mapping=mapping,
+                params=params,
+                mapping_mode=mapping_mode,
+            )
+            patch_report["item_index"] = index
+            patch_report["item_id"] = item_id
+            patch_report["value_sources"] = _build_value_sources(manifest, item)
+            patch_report["fallback_fields"] = _build_fallback_fields(patch_report["value_sources"])
+            patch_report["unsupported_fields"] = _build_unsupported_fields(
+                mapping=mapping,
+                params=params,
+            )
 
-        item_id = item.get("id", index)
-        report_json = patch_report_dir / f"{params.filename_prefix}_patch_report.json"
-        report_md = patch_report_dir / f"{params.filename_prefix}_patch_report.md"
-        _write_json(report_json, patch_report)
-        _render_patch_report_markdown(
-            item={"item_id": item_id, "subject": item.get("subject", "")},
-            report=patch_report,
-            output_path=report_md,
-        )
+            save_workflow_json(patched_workflow, output_path)
+            _write_json(report_json, patch_report)
+            _render_patch_report_markdown(
+                item={"item_id": item_id, "subject": item.get("subject", "")},
+                report=patch_report,
+                output_path=report_md,
+            )
+
+            item["patched_workflow_path"] = str(output_path.as_posix())
+            item["patch_report_path"] = str(report_json.as_posix())
+            item["patch_status"] = "success"
+            item["patch_error"] = ""
+        except Exception as exc:
+            item["patched_workflow_path"] = ""
+            item["patch_report_path"] = ""
+            item["patch_status"] = "failed"
+            item["patch_error"] = str(exc)
+            print(f"[ERROR] Patch failed for item {index}/{len(items)}: {exc}")
 
         index_rows.append(
             {
+                "item_index": index,
                 "item_id": item_id,
                 "subject": item.get("subject", ""),
-                "patched_workflow": str(output_path.as_posix()),
-                "patch_report_json": str(report_json.as_posix()),
-                "patch_report_md": str(report_md.as_posix()),
+                "patched_workflow": str(item.get("patched_workflow_path", "")),
+                "patch_report_json": str(item.get("patch_report_path", "")),
                 "mapping_mode": mapping_mode,
+                "patch_status": item.get("patch_status", "unknown"),
+                "patch_error": item.get("patch_error", ""),
+                "filename_prefix": item.get("filename_prefix", ""),
             }
         )
 
-        if client is not None:
-            response = client.submit_prompt(
-                _extract_prompt_graph(patched_workflow),
-                client_id=args.client_id.strip() or None,
-            )
-            submit_results.append(
+        if client is not None and str(item.get("patched_workflow_path", "")).strip():
+            try:
+                response = client.submit_prompt(
+                    _extract_prompt_graph(patched_workflow),
+                    client_id=args.client_id.strip() or None,
+                )
+                prompt_id = str(response.get("prompt_id", "")).strip()
+                if prompt_id:
+                    print(
+                        f"[OK] Submit success for item {index}/{len(items)}, prompt_id={prompt_id}"
+                    )
+                else:
+                    print(f"[WARN] Submit returned without prompt_id for item {index}/{len(items)}")
+                submit_items.append(
+                    {
+                        "item_index": index,
+                        "item_id": item_id,
+                        "patched_workflow_path": str(output_path.as_posix()),
+                        "positive_prompt": str(item.get("positive_prompt", "")),
+                        "filename_prefix": str(item.get("filename_prefix", "")),
+                        "prompt_id": prompt_id,
+                        "success": True,
+                        "subject": item.get("subject", ""),
+                        "response": response,
+                    }
+                )
+            except Exception as exc:
+                error, node_errors = _extract_submit_error(exc)
+                print(f"[ERROR] Submit failed for item {index}/{len(items)}: {error}")
+                if node_errors:
+                    print(f"[ERROR] node_errors: {json.dumps(node_errors, ensure_ascii=False)}")
+                submit_items.append(
+                    {
+                        "item_index": index,
+                        "item_id": item_id,
+                        "patched_workflow_path": str(output_path.as_posix()),
+                        "positive_prompt": str(item.get("positive_prompt", "")),
+                        "filename_prefix": str(item.get("filename_prefix", "")),
+                        "prompt_id": "",
+                        "success": False,
+                        "error": error,
+                        "node_errors": node_errors,
+                        "subject": item.get("subject", ""),
+                    }
+                )
+        elif client is not None:
+            submit_items.append(
                 {
+                    "item_index": index,
                     "item_id": item_id,
+                    "patched_workflow_path": "",
+                    "positive_prompt": str(item.get("positive_prompt", "")),
+                    "filename_prefix": str(item.get("filename_prefix", "")),
+                    "prompt_id": "",
+                    "success": False,
+                    "error": str(item.get("patch_error", "patch failed")),
+                    "node_errors": {},
                     "subject": item.get("subject", ""),
-                    "response": response,
                 }
             )
 
-    patched_output_dir.mkdir(parents=True, exist_ok=True)
-    patch_report_dir.mkdir(parents=True, exist_ok=True)
-
-    index_path = patched_output_dir / "patched_workflow_index.json"
+    index_path = run_dir / "patched_workflow_index.json"
     _write_json(index_path, {"items": index_rows})
-    print(f"[OK] Patched workflow files generated: {len(index_rows)}")
+    successful_rows = [
+        row for row in index_rows if str(row.get("patch_status", "")) == "success"
+    ]
+    if successful_rows:
+        single = successful_rows[0]
+        patched_src = Path(single["patched_workflow"])
+        report_json_src = Path(single["patch_report_json"])
+        save_workflow_json(load_workflow_json(patched_src), run_dir / "patched_workflow.json")
+        if report_json_src.exists():
+            _write_json(
+                run_dir / "patch_report.json",
+                json.loads(report_json_src.read_text(encoding="utf-8")),
+            )
+    _render_batch_patch_report_markdown(
+        manifest=manifest,
+        output_path=run_dir / "patch_report.md",
+    )
+    save_manifest_json(manifest, run_dir / "run_manifest.json")
+
+    print(f"[OK] Patched workflow files generated: {len(successful_rows)}/{len(index_rows)}")
     print(f"[OK] Output directory: {patched_output_dir}")
     print(f"[OK] Patched workflow index: {index_path}")
 
-    if submit_results:
-        submit_log_path = Path("results/comfyui_submit_results.json")
-        _write_json(submit_log_path, {"items": submit_results})
-        print(f"[OK] Submitted {len(submit_results)} workflows to ComfyUI.")
-        print(f"[OK] Submission results saved to: {submit_log_path}")
+    if submit_items:
+        submit_log_path = _write_submit_results(
+            run_dir=run_dir,
+            server_url=comfyui_url,
+            results=submit_items,
+            used_existing_patched_workflows=False,
+        )
+        print(f"[OK] Submit results saved to: {submit_log_path}")
+    failed_submit_items = [item for item in submit_items if not bool(item.get("success"))]
+    if failed_submit_items:
+        raise RuntimeError(
+            "One or more submit requests failed. Check console logs and "
+            "`comfyui_submit_results.json` in this run directory."
+        )
+    failed_patch_items = [item for item in items if item.get("patch_status") != "success"]
+    if failed_patch_items:
+        raise RuntimeError(
+            "One or more workflow patch operations failed. Check `patch_report.md` and "
+            "`patched_workflow_index.json` for details."
+        )
 
 
 def main() -> None:
@@ -602,11 +1252,19 @@ def main() -> None:
         if args.mode == "suggest_mapping":
             run_suggest_mapping(args, config)
             return
-        if args.mode in {"workflow_import_pipeline", "prepare_workflow_import"}:
+        if args.mode == "workflow_import_pipeline":
             run_workflow_import_pipeline(args, config)
             return
 
-        manifest = _build_manifest_if_needed(args, config)
+        workflow_path: Path | None = None
+        if args.mode in {"manifest", "patch_workflow", "auto_patch_workflow", "submit"}:
+            try:
+                workflow_path = _resolve_workflow_path(args, config)
+            except Exception:
+                workflow_path = None
+        run_dir = _resolve_run_dir(args=args, config=config, workflow_path=workflow_path)
+
+        manifest = _build_manifest_if_needed(args, config, run_dir=run_dir)
         if manifest is None:
             raise RuntimeError("Manifest was not generated for selected mode.")
 
@@ -630,6 +1288,7 @@ def main() -> None:
                 args=args,
                 config=config,
                 manifest=manifest,
+                run_dir=run_dir,
                 submit=False,
                 force_auto_mode=False,
             )
@@ -639,6 +1298,7 @@ def main() -> None:
                 args=args,
                 config=config,
                 manifest=manifest,
+                run_dir=run_dir,
                 submit=False,
                 force_auto_mode=True,
             )
@@ -648,6 +1308,7 @@ def main() -> None:
                 args=args,
                 config=config,
                 manifest=manifest,
+                run_dir=run_dir,
                 submit=True,
                 force_auto_mode=False,
             )
@@ -662,5 +1323,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
