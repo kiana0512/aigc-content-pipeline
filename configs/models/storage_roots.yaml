@@ -1,0 +1,4 @@
+storage_roots:
+  python_weights_root: F:/python_project/game-aigc-asset-workflow/weights
+  comfy_model_root: E:/Comfyui/models
+  legacy_modelscope_root: E:/modelscope_tmp_clean

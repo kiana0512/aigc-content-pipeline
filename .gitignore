@@ -8,12 +8,17 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.so
-*.egg
 *.egg-info/
 .eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+htmlcov/
+build/
+dist/
 
-# Virtual envs
+# Environments
 .venv/
 venv/
 env/
@@ -25,17 +30,7 @@ conda-meta/
 .idea/
 .vscode/
 
-# Tool caches
-.ipynb_checkpoints/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-coverage/
-htmlcov/
-build/
-dist/
-
-# Logs / temp
+# Logs and temp
 logs/
 *.log
 tmp/
@@ -51,10 +46,10 @@ temp/
 secrets.yaml
 secrets.yml
 
-# Models / heavy binaries
-models/
-checkpoints/
-weights/
+# Model weights and heavy binaries
+/models/
+/checkpoints/
+/weights/
 *.ckpt
 *.pt
 *.pth
@@ -63,13 +58,25 @@ weights/
 *.engine
 *.safetensors
 
-# Runtime outputs
-outputs/
-results/runs/*
-!results/runs/.gitkeep
+# Data caches and raw assets
+data/raw/
+data/cache/
+data/**/*.psd
+data/**/*.clip
 
-# ComfyUI artifacts
+# Runtime outputs
+outputs/*
+!outputs/.gitkeep
+results/
 comfyui_output/
 comfyui_temp/
 *.latent
 *.npz
+
+# Large generated images
+*.png
+*.jpg
+*.jpeg
+*.webp
+!data/sample_references/.gitkeep
+!portfolio/**/.gitkeep

@@ -1,0 +1,6 @@
+controlnet:
+  lineart_sdxl:
+    controlnet: controlnet-lineart-sdxl.safetensors
+
+  depth_sdxl:
+    controlnet: controlnet-depth-sdxl.safetensors

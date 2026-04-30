@@ -1,0 +1,9 @@
+checkpoints:
+  animagine_xl:
+    checkpoint: animagine-xl-4.0.safetensors
+    vae: sdxl_vae.safetensors
+    loras: []
+
+  video_reserved:
+    checkpoint: video-placeholder.safetensors
+    video_model: video-placeholder.safetensors

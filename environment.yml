@@ -1,0 +1,11 @@
+name: aigc-2d-asset-workflow
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - pyyaml
+      - requests
+      - pydantic
+      - pytest

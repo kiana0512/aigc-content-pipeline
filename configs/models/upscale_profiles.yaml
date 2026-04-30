@@ -1,0 +1,7 @@
+upscalers:
+  ultrasharp_4x:
+    upscaler: 4x-UltraSharp.pth
+
+vae:
+  sdxl_vae:
+    vae: sdxl_vae.safetensors

@@ -1,0 +1,36 @@
+defaults:
+  segmentation: sam3_1
+  detector: mock_detector
+  vlm: mock_vlm
+  tagger: mock_tagger
+  checkpoint: animagine_xl
+  vae: sdxl_vae
+  controlnet: lineart_sdxl
+  ipadapter: plus_sdxl
+  upscaler: ultrasharp_4x
+
+segmentation:
+  sam3_1:
+    root_key: python_weights_root
+    relative_path: segmentation/sam3.1
+  sam3:
+    root_key: python_weights_root
+    relative_path: segmentation/sam3
+  birefnet:
+    root_key: python_weights_root
+    relative_path: segmentation/BiRefNet
+
+detectors:
+  mock_detector:
+    root_key: python_weights_root
+    relative_path: detectors/mock
+
+vlm:
+  mock_vlm:
+    root_key: python_weights_root
+    relative_path: vlm/mock
+
+tagger:
+  mock_tagger:
+    root_key: python_weights_root
+    relative_path: tagger/mock

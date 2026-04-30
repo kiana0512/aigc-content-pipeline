@@ -1,0 +1,15 @@
+lora:
+  firefly_identity_reserved:
+    root_key: comfy_model_root
+    relative_path: loras/firefly_identity.safetensors
+    weight: 0.75
+    trigger_words:
+      - firefly
+      - liuying
+
+  wallpaper_style_reserved:
+    root_key: comfy_model_root
+    relative_path: loras/wallpaper_style.safetensors
+    weight: 0.6
+    trigger_words:
+      - cinematic wallpaper

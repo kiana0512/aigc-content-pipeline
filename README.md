@@ -1,68 +1,106 @@
-﻿# game-aigc-asset-workflow
+# GAME-AIGC-ASSET-WORKFLOW
 
-精简后的 ComfyUI API 批量生成仓库。
-当前只保留一条主链路：`prompt pack -> patch workflow -> submit`。
+Local multimodal AIGC experiment workbench for reproducible 2D generation. Phase 1 focuses on: Firefly character standee -> high-aesthetic 4K wallpaper.
 
-## 保留能力
-- 读取 prompt pack 多行任务
-- 为每个 item 生成独立 patched workflow
-- 批量提交到 ComfyUI `/prompt`
-- 产出每个 item 的 patch 报告与提交结果
+The Python repo owns benchmark data, prompt assembly, model profile resolution, ComfyUI workflow templating, real ComfyUI API calls, batch runs, run manifests, scoring summaries, lightweight retrieval, and rule-based agent hooks. ComfyUI only runs generation.
 
-## Prompt 覆盖规则（重要）
-- 原始 workflow JSON 里的 prompt 只是模板默认示例。
-- 运行时如果提供 prompt pack，最终 prompt 以 prompt pack 为准。
-- 一句话：原始 JSON 决定怎么生成，CSV 决定生成什么。
+## What Works Now
 
-## 目录（已精简）
-- `configs/`：两套可运行配置 + 对应 node map
-- `workflows/comfyui/`：两份真实 API workflow
-- `examples/prompt_packs/`：两份示例 prompt pack
-- `scripts/run_batch_generation.py`：唯一入口脚本
-- `src/generation/`：核心实现
-- `tests/`：当前主链路测试
-- `results/runs/`：运行输出目录（默认仅保留 `.gitkeep`）
+- `text2img`, `img2img`, `img2img_ipadapter_controlnet`, `upscale_4k`
+- reserved template/interface for `image2video` and `text2video`
+- config-driven execution from `configs/generation/*.yaml`
+- model profile resolution from `configs/models/*.yaml`, with `root_key + relative_path` storage roots
+- reference pack scan, segmentation/crop/caption/tags/analysis artifacts, prompt bundle generation
+- real HTTP ComfyUI API submit/poll/download
+- reproducible `results/runs/<run_id>/run_manifest.json`
+- mock VLM, Tagger, segmentation, CLIP/aesthetic/technical/VLM/wallpaper scoring providers
 
-## 快速开始（PowerShell）
-1. 生成按 item 拆分的 patched workflows
+## Responsibility Boundary
+
+Python manages reference assets, analysis contracts, prompt bundles, workflow input patching, scheduling, output download, scoring, reproducibility, retrieval, and agent suggestions.
+
+ComfyUI manages actual model loading and generation: text2img, img2img, IP-Adapter, ControlNet, LoRA, upscale, and future video. Multi-node workflows must be built and validated manually in ComfyUI first, then exported as API JSON templates. Python does not guess node wiring; it only patches known placeholders and runs batches.
+
+## Run
+
 ```powershell
-python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --prompt-pack examples/prompt_packs/z_image_turbo_prompt_pack.csv --mode workflow_import_pipeline --run-name z_image_turbo_batch_test
+pip install -r requirements.txt
+python scripts/check_env.py
 ```
 
-2. 批量 submit 到 ComfyUI
+Import a real ComfyUI API JSON exported from a workflow that was already validated in the ComfyUI UI:
+
 ```powershell
-python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --prompt-pack examples/prompt_packs/z_image_turbo_prompt_pack.csv --mode submit --run-name z_image_turbo_batch_test
+python scripts/import_comfy_workflow.py `
+  --workflow-json workflows/comfyui/incoming/firefly_img2img_28node_api.json `
+  --workflow-id firefly_img2img_v1 `
+  --set-active
 ```
 
-3. 从 workflow 默认 prompt 导出一行 prompt pack（可选）
+Inspect the active workflow:
+
 ```powershell
-python scripts/run_batch_generation.py --config configs/z_image_turbo_api.yaml --mode export_default_prompt_pack
+python scripts/inspect_workflow.py --active
 ```
 
-## 接入一个新的 ComfyUI API workflow
-1. 把新 JSON 放到 `workflows/comfyui/`
-2. 运行 scaffold 自动生成配套文件
-```powershell
-python scripts/run_batch_generation.py --mode scaffold_workflow --workflow-json workflows/comfyui/my_new_workflow_api.json --slug my_new_workflow
-```
-3. 用默认 prompt 跑一轮（复现 workflow 默认图）
-```powershell
-python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode workflow_import_pipeline --run-name my_new_workflow_default_round1
-python scripts/run_batch_generation.py --config configs/my_new_workflow_api.yaml --prompt-pack examples/prompt_packs/my_new_workflow_default_from_workflow.csv --mode submit --run-name my_new_workflow_default_round1
+Analyze references and build tasks:
+
+python scripts/analyze_references.py --pack data/reference_packs/firefly_v1
+python scripts/build_tasks.py --pack data/reference_packs/firefly_v1 --mode topk_style_per_raw --topk 3
 ```
 
-支持参数：
-- `--force`：覆盖已存在 scaffold 文件（会备份到 `results/runs/scaffold_<slug>/backup/`）
-- `--validate`：生成后自动跑一次 `workflow_import_pipeline`
-- `--submit-after-validate`：仅与 `--validate` 一起使用，验证后自动提交
+Dry-run, then execute:
 
-## 关键输出
-- `results/runs/<run_name>/run_manifest.json`
-- `results/runs/<run_name>/patched_workflows/item_0001_patched_workflow.json`
-- `results/runs/<run_name>/patch_reports/item_0001_patch_report.json`
-- `results/runs/<run_name>/patch_report.md`
-- `results/runs/<run_name>/comfyui_submit_results.json`
+```powershell
+python scripts/batch_generate_stub.py --tasks data/reference_packs/firefly_v1/generation_tasks.csv --dry-run
+python scripts/batch_generate_stub.py --tasks data/reference_packs/firefly_v1/generation_tasks.csv --execute --download-outputs --comfy-url http://127.0.0.1:8188
+```
 
-## 文档
-- [项目结构与使用说明（中文）](/d:/RT/game-aigc-asset-workflow/docs/project_structure_and_usage_zh.md)
-- [ComfyUI 操作手册（中文）](/d:/RT/game-aigc-asset-workflow/docs/comfyui_usage_zh.md)
+Use `http://127.0.0.1:8000` instead if your ComfyUI server runs there.
+
+## Models
+
+Edit `configs/models/storage_roots.yaml` and the profile YAML files in `configs/models/`. Model paths are not hard-coded; profiles use `root_key + relative_path`.
+
+## Reference Pack
+
+Put character images in `data/reference_packs/firefly_v1/raw/` and style images in `data/reference_packs/firefly_v1/style/`. The analysis script writes editable artifacts under `processed/` and generates `manifest.csv` plus `prompt_sheet.csv`.
+
+## Results
+
+Every run writes:
+
+```text
+results/runs/<run_id>/
+  run_manifest.json
+  batch_summary.json
+  task_000.workflow.json
+  tasks.json
+  outputs/            # when --download-outputs is enabled
+```
+
+Generate a simple report:
+
+```powershell
+python scripts/generate_report.py --run-manifest results/runs/<run_id>/run_manifest.json
+```
+
+## Mock vs Real
+
+Real: ComfyUI API client, workflow placeholder patching, config/profile merge, batch dry-run/execute path, run manifest writing, output downloading.
+
+Mock/provider interface: VLM caption/critique, Tagger, CLIP/aesthetic/technical/VLM/wallpaper scorers, retrieval-assisted agent recommendations. Replace providers without changing the batch/runtime contracts.
+
+## File Roles
+
+- `src/aigc2d/reference_pack.py`: reference pack scan and auto manifest rows.
+- `src/aigc2d/reference_analysis.py`: VLM/Tagger/segmentation orchestration.
+- `src/aigc2d/prompt_bundle.py`: structured prompt bundle JSON.
+- `src/aigc2d/workflow_runtime.py`: config/profile/manifest/prompt merge and workflow patching.
+- `src/aigc2d/model_profiles.py`: storage roots, defaults, profile resolution, LoRA contract.
+- `src/aigc2d/comfy_client.py`: real ComfyUI HTTP API client.
+- `src/aigc2d/scoring.py` and `src/aigc2d/scorers/`: score breakdown and explanations.
+- `src/aigc2d/retrieval.py`, `src/aigc2d/agent.py`: historical lookup and rule-based suggestions.
+- `scripts/analyze_references.py`: build processed reference artifacts and prompt sheet.
+- `scripts/build_manifest.py`: generate editable manifest from a reference pack.
+- `scripts/batch_generate_stub.py`: dry-run or execute ComfyUI batch generation.

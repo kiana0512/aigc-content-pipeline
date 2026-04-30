@@ -1,14 +1,15 @@
 [tool.black]
 line-length = 88
-target-version = ["py311"]
+target-version = ["py310", "py311"]
 skip-string-normalization = false
 
 [tool.isort]
 profile = "black"
 line_length = 88
-known_first_party = ["src"]
+known_first_party = ["aigc2d"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
+pythonpath = ["src"]
