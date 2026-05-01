@@ -1,15 +1,93 @@
 defaults:
-  segmentation: sam3_1
-  detector: mock_detector
-  vlm: mock_vlm
-  tagger: mock_tagger
+  segmentation: external_sam3
+  detector: disabled
+  vlm: qwen2_5_vl
+  tagger: wd14
   checkpoint: animagine_xl
   vae: sdxl_vae
   controlnet: lineart_sdxl
   ipadapter: plus_sdxl
   upscaler: ultrasharp_4x
 
+analysis:
+  provider: real
+  strict_real: true
+  device: cuda
+  enable_detector: false
+  screenshots_emphasis: true
+  # 每张图跑完后卸载 BiRefNet / WD14 session / VLM，避免与 Qwen-VL 等同驻显存导致 16GB GPU OOM（会略增重载耗时）。
+  unload_models_between_assets: true
+  # WD14 仅占 CPU 推理，把显存留给 Qwen2.5-VL；打标会稍慢。
+  tagger_force_cpu: true
+  # 同一张字节完全相同的参考图在多路径出现时只推理一次，其余 workspace 拷贝结果；调度顺序仍可优先同人/截屏文件夹。
+  dedupe_duplicate_images: true
+
+detector:
+  enabled: false
+  provider: none
+
 segmentation:
+  provider: external_sam3
+  conda_env: sam3
+  python_exe: "D:/Program Files/anaconda3/envs/sam3/python.exe"
+  sam3_repo_dir: "F:/python_project/game-aigc-asset-workflow/sam3"
+  # SAM3 image stack (build_sam3_image_model): use weights under segmentation/sam3, not SAM3.1 multiplex.
+  sam3_model_root: "F:/python_project/game-aigc-asset-workflow/weights/segmentation/sam3"
+  sam3_backend: image
+  sam3_config_path: ""
+  sam3_checkpoint_path: ""
+  offline: true
+  # SAM3 image：若 GPU 支持 CUDA BF16（如 Ampere）则沿用官方 notebook 的 bfloat16 autocast；否则会走 FP32 权重或失败后自动降级。
+
+  cli_script: scripts/sam3_segment_cli.py
+  device: cuda
+  timeout_sec: 600
+  prompts:
+    - main subject
+    - anime character
+    - person
+  min_mask_area_ratio: 0.03
+  max_mask_area_ratio: 0.90
+  # Used by SAM3.1 multiplex only (--sam3-backend multiplex|auto w/ multiplex checkpoint).
+  output_prob_thresh: 0.15
+  sam31_image_mode: true
+  allow_fallback_to_birefnet: false
+
+matting:
+  provider: birefnet
+  model_root: weights/segmentation/BiRefNet
+
+tagger:
+  # wd14：model_root 下任意子目录递归查找 model.onnx（或 wd14*.onnx）与标签表。
+  # HuggingFace/SmilingWolf 常见为 .../SmilingWolf/<variant>/model.onnx + tags_info.csv（会优先于 inv_experiments.csv）。
+  # none|disabled|skip|off：跳过打标（仍属 strict_real：mock=false，产出空 tags）。
+  provider: wd14
+  model_root: weights/tagger/wd14_tagger_with_embeddings
+  general_threshold: 0.35
+  character_threshold: 0.50
+
+vlm:
+  provider: qwen2_5_vl
+  model_root: weights/vlm/Qwen2.5-VL-7B-Instruct
+  fallback_provider: florence2
+  fallback_model_root: weights/vlm/Florence-2-large-PromptGen-v2.0
+  allow_fallback: false
+  # 长 JSON（多字段 + keywords 数组）需要足够预算；320 易在数组处被截断导致 json 解析失败。省显存时可降像素，不宜同时压得过低。
+  max_new_tokens: 512
+  min_pixels: 200704
+  max_pixels: 401408
+  # PyTorch CUDA 可走 sdpa；若加载失败会自动去掉该参数再试。不需要时设 none/off。
+  attn_implementation: sdpa
+
+image_artifacts:
+  square_size: 1024
+  crop_pad_ratio: 0.18
+  min_mask_area_ratio: 0.03
+  max_mask_area_ratio: 0.90
+  canny_low: 80
+  canny_high: 160
+
+segmentation_profiles:
   sam3_1:
     root_key: python_weights_root
     relative_path: segmentation/sam3.1
@@ -25,12 +103,12 @@ detectors:
     root_key: python_weights_root
     relative_path: detectors/mock
 
-vlm:
+vlm_profiles:
   mock_vlm:
     root_key: python_weights_root
     relative_path: vlm/mock
 
-tagger:
+tagger_profiles:
   mock_tagger:
     root_key: python_weights_root
     relative_path: tagger/mock

@@ -1,4 +1,4 @@
-﻿# OS
+# OS
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -68,10 +68,19 @@ data/**/*.clip
 outputs/*
 !outputs/.gitkeep
 results/
+portfolio/*
+!portfolio/.gitkeep
 comfyui_output/
 comfyui_temp/
 *.latent
 *.npz
+
+# Generated reference-pack artifacts
+data/reference_packs/*/processed/
+data/reference_packs/*/manifest.csv
+data/reference_packs/*/prompt_sheet.csv
+data/reference_packs/*/generation_tasks.csv
+data/reference_packs/*/pack_summary.json
 
 # Large generated images
 *.png
@@ -80,3 +89,6 @@ comfyui_temp/
 *.webp
 !data/sample_references/.gitkeep
 !portfolio/**/.gitkeep
+
+# External repositories
+/sam3/

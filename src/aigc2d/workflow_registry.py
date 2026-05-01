@@ -10,12 +10,14 @@ from typing import Any
 
 import yaml
 
+from .comfy_workflow_analyzer import ComfyWorkflowAnalyzer
 from .config import PROJECT_ROOT, load_json, load_yaml, write_json
 
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
 REGISTRY_DIR = PROJECT_ROOT / "workflows" / "comfyui" / "registry"
 ACTIVE_WORKFLOW_PATH = PROJECT_ROOT / "configs" / "workflows" / "active_workflow.yaml"
+REGISTERED_WORKFLOW_DIR = PROJECT_ROOT / "workflows" / "comfyui" / "registered"
 
 
 @dataclass
@@ -23,13 +25,23 @@ class WorkflowMetadata:
     workflow_id: str
     workflow_json_path: str
     source_json_path: str = ""
+    source_raw_json_path: str = ""
     imported_time: str = ""
+    created_at: str = ""
+    updated_at: str = ""
     workflow_type: str = "hybrid"
+    auto_analyzed: bool = False
     supported_inputs: list[str] = field(default_factory=list)
     optional_modules: dict[str, bool] = field(default_factory=dict)
+    detected_modules: dict[str, Any] = field(default_factory=dict)
+    node_inventory: dict[str, Any] = field(default_factory=dict)
+    graph: dict[str, Any] = field(default_factory=dict)
     placeholders: list[str] = field(default_factory=list)
     patch_contract: dict[str, Any] = field(default_factory=dict)
+    candidates: dict[str, Any] = field(default_factory=dict)
+    ambiguous_candidates: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    manual_overrides: dict[str, Any] = field(default_factory=lambda: {"enabled": True, "notes": ""})
 
 
 def is_comfy_api_prompt(data: dict[str, Any]) -> bool:
@@ -77,12 +89,20 @@ def default_patch_contract(placeholders: list[str]) -> dict[str, Any]:
     }
 
 
+def _metadata_from_dict(data: dict[str, Any]) -> WorkflowMetadata:
+    known = WorkflowMetadata.__dataclass_fields__
+    payload = {key: value for key, value in data.items() if key in known}
+    if not payload.get("source_raw_json_path") and payload.get("source_json_path"):
+        payload["source_raw_json_path"] = payload["source_json_path"]
+    return WorkflowMetadata(**payload)
+
+
 class WorkflowRegistry:
     def __init__(
         self,
         registry_dir: str | Path = REGISTRY_DIR,
         active_path: str | Path = ACTIVE_WORKFLOW_PATH,
-        workflow_dir: str | Path = PROJECT_ROOT / "workflows" / "comfyui",
+        workflow_dir: str | Path = REGISTERED_WORKFLOW_DIR,
     ) -> None:
         self.registry_dir = Path(registry_dir)
         self.active_path = Path(active_path)
@@ -93,6 +113,7 @@ class WorkflowRegistry:
         workflow_json: str | Path,
         workflow_id: str,
         set_active: bool = False,
+        auto_map: bool = True,
     ) -> WorkflowMetadata:
         source = Path(workflow_json)
         data = load_json(source)
@@ -106,22 +127,32 @@ class WorkflowRegistry:
         target_json = self.workflow_dir / f"{workflow_id}.json"
         shutil.copy2(source, target_json)
         placeholders = find_placeholders(data)
-        warnings = []
-        if not placeholders:
-            warnings.append(
-                "No {{placeholders}} found. Add mappings in registry metadata patch_contract.node_inputs."
-            )
+        now = datetime.now(timezone.utc).isoformat()
+        analysis = ComfyWorkflowAnalyzer(data).analyze() if auto_map else {}
+        warnings = list(analysis.get("warnings", []))
+        if not placeholders and not analysis.get("patch_contract", {}).get("node_inputs"):
+            warnings.append("No {{placeholders}} or auto patch mappings found; edit registry patch_contract.node_inputs manually.")
         metadata = WorkflowMetadata(
             workflow_id=workflow_id,
             workflow_json_path=str(target_json),
             source_json_path=str(source),
-            imported_time=datetime.now(timezone.utc).isoformat(),
-            workflow_type=infer_workflow_type(data),
+            source_raw_json_path=str(source),
+            imported_time=now,
+            created_at=now,
+            updated_at=now,
+            workflow_type=analysis.get("workflow_type") or infer_workflow_type(data),
+            auto_analyzed=auto_map,
             supported_inputs=placeholders,
             optional_modules=infer_optional_modules(data),
+            detected_modules=analysis.get("detected_modules", infer_optional_modules(data)),
+            node_inventory=analysis.get("node_inventory", {}),
+            graph=analysis.get("graph", {}),
             placeholders=placeholders,
-            patch_contract=default_patch_contract(placeholders),
+            patch_contract=analysis.get("patch_contract") or default_patch_contract(placeholders),
+            candidates=analysis.get("candidates", {}),
+            ambiguous_candidates=analysis.get("ambiguous_candidates", {}),
             warnings=warnings,
+            manual_overrides={"enabled": True, "notes": ""},
         )
         self.write_metadata(metadata)
         if set_active:
@@ -140,7 +171,7 @@ class WorkflowRegistry:
 
     def load_metadata(self, workflow_id: str) -> WorkflowMetadata:
         data = load_yaml(self.metadata_path(workflow_id))
-        return WorkflowMetadata(**data)
+        return _metadata_from_dict(data)
 
     def set_active(self, workflow_id: str) -> Path:
         metadata = self.load_metadata(workflow_id)
@@ -149,9 +180,6 @@ class WorkflowRegistry:
             yaml.safe_dump(
                 {
                     "active_workflow_id": workflow_id,
-                    "workflow_json_path": metadata.workflow_json_path,
-                    "workflow_type": metadata.workflow_type,
-                    "metadata_path": str(self.metadata_path(workflow_id)),
                 },
                 f,
                 allow_unicode=True,
@@ -186,6 +214,9 @@ class WorkflowRegistry:
             if node_id not in workflow or "inputs" not in workflow[node_id]:
                 warnings.append(f"Patch mapping not found in workflow: {field_name} -> node {node_id}")
                 continue
+            if input_name not in workflow[node_id]["inputs"]:
+                warnings.append(f"Patch input not found in workflow: {field_name} -> node {node_id}.{input_name}")
+                continue
             workflow[node_id]["inputs"][input_name] = value
         return warnings
 
@@ -195,7 +226,7 @@ def ensure_default_active_workflow() -> None:
     if registry.get_active():
         return
     workflow_id = "img2img_ipadapter_controlnet_wallpaper_v1"
-    workflow_path = PROJECT_ROOT / "workflows" / "comfyui" / f"{workflow_id}.json"
+    workflow_path = REGISTERED_WORKFLOW_DIR / f"{workflow_id}.json"
     if not workflow_path.exists():
         return
     data = load_json(workflow_path)

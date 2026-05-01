@@ -58,6 +58,12 @@ class ModelProfileResolver:
         if not name:
             return {}
         profiles = self.data.get(section, {})
+        if name not in profiles and section == "segmentation":
+            profiles = self.data.get("segmentation_profiles", profiles)
+        if name not in profiles and section == "vlm":
+            profiles = self.data.get("vlm_profiles", profiles)
+        if name not in profiles and section == "tagger":
+            profiles = self.data.get("tagger_profiles", profiles)
         if name not in profiles:
             raise KeyError(f"Unknown model profile: {section}.{name}")
         return profiles[name] or {}

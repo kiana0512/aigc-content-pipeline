@@ -2,3 +2,13 @@ pyyaml
 requests
 pydantic
 pytest
+pillow
+numpy
+opencv-python
+torch
+torchvision
+# Qwen2.5-VL / multimodal loaders need a current transformers (AutoModelForImageTextToText / remote code paths).
+transformers>=4.51.0,<6
+# Qwen2.5-VL: apply_chat_template + process_vision_info before processor(...)
+qwen-vl-utils
+onnxruntime-gpu

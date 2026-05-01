@@ -8,7 +8,7 @@ Python 仓库负责：
 
 - 管理 `reference pack`
 - 生成 `manifest.csv`、`prompt_sheet.csv`、`generation_tasks.csv`
-- 调用 VLM / Tagger / Detection / Segmentation provider，当前可为 mock
+- 调用真实 VLM / Tagger / Detection / Segmentation / Matting provider
 - 生成标准 `processed/` 中间产物
 - 导入和切换 ComfyUI API JSON
 - 根据 active workflow metadata 做参数 patch
@@ -20,7 +20,7 @@ ComfyUI 负责：
 - 真正执行 text2img / img2img / upscale / video workflow
 - 多节点 workflow 的节点连接
 
-重要原则：workflow 必须先在 ComfyUI UI 里手工搭建、跑通、导出 API JSON。Python 不猜节点连接，只导入、注册、切换、patch 参数和批量调度。
+重要原则：workflow 必须先在 ComfyUI UI 里手工搭建、跑通、导出 API JSON。Python 不改节点连接，也不在运行时代码里写死 node_id；它会读取 API JSON，自动分析节点结构，生成 registry / patch contract，再按 registry patch 参数和批量调度。
 
 ## 一次完整使用流程
 
@@ -43,32 +43,33 @@ ComfyUI 负责：
 把你从 ComfyUI 导出的真实 API JSON 放到例如：
 
 ```text
-workflows/comfyui/incoming/firefly_img2img_28node_api.json
+workflows/comfyui/_raw_exports/<your_workflow>.json
 ```
 
 导入并设为 active：
 
 ```powershell
 python scripts/import_comfy_workflow.py `
-  --workflow-json workflows/comfyui/incoming/firefly_img2img_28node_api.json `
-  --workflow-id firefly_img2img_v1 `
-  --set-active
+  --workflow-json workflows/comfyui/_raw_exports/<your_workflow>.json `
+  --workflow-id <workflow_id> `
+  --set-active `
+  --auto-map
 ```
 
 导入后会生成：
 
 ```text
-workflows/comfyui/<workflow_id>.json
+workflows/comfyui/registered/<workflow_id>.json
 workflows/comfyui/registry/<workflow_id>.yaml
 configs/workflows/active_workflow.yaml
 ```
 
-如果导入的 API JSON 没有 `{{placeholder}}`，脚本会提示你去 registry metadata 里补 `patch_contract.node_inputs`。这不是错误，因为真实 ComfyUI 导出通常没有占位符，节点字段映射需要人工确认。
+registry 里会记录 `node_inventory`、`detected_modules`、`patch_contract.node_inputs`、`candidates`、`ambiguous_candidates` 和 `warnings`。自动解析不是魔法：能确定的字段会自动映射，有歧义的 prompt / image / sampler 角色会写入 warnings，需要你检查 registry。
 
 ### 3. 检查 active workflow
 
 ```powershell
-python scripts/inspect_workflow.py --active
+python scripts/inspect_workflow.py --active --show-candidates
 ```
 
 重点看：
@@ -77,8 +78,9 @@ python scripts/inspect_workflow.py --active
 - workflow JSON 路径
 - workflow type
 - optional modules：LoRA / IPAdapter / ControlNet / Upscale
-- 可 patch 的 placeholder
-- 缺失模型映射或缺失 patch contract 的 warning
+- 自动映射的 `patch_contract.node_inputs`
+- 候选节点、歧义节点和 warning
+- registry 指向的 node_id / input key 是否存在
 
 ### 4. 放入 reference pack 图片
 
@@ -86,8 +88,11 @@ python scripts/inspect_workflow.py --active
 
 ```text
 data/reference_packs/firefly_v1/
-  raw/      # 角色主图，建议 10 张左右
-  style/    # 风格参考图，建议 20 张左右
+  selected/init/
+  selected/identity/
+  selected/style/
+  raw/
+  style/
 ```
 
 也兼容更细目录：
@@ -103,6 +108,12 @@ selected/mecha
 selected/composition
 selected/style
 selected/background
+init
+identity
+face
+mecha
+composition
+background
 ```
 
 如果只有一张流萤立绘，先放到 `raw/` 或 `raw/official/`。后续建议补 face、identity、composition、style、background 图。
@@ -111,6 +122,49 @@ selected/background
 
 ```powershell
 python scripts/analyze_references.py --pack data/reference_packs/firefly_v1
+```
+
+默认等价于：
+
+```powershell
+python scripts/analyze_references.py --pack data/reference_packs/firefly_v1 --provider real --device cuda --strict-real
+```
+
+真实模式会加载本地模型并真实推理，速度不会像 mock 那样瞬间完成。当前默认主链路是 `SAM3.1 + BiRefNet + WD14 + Qwen2.5-VL / Florence`，不再默认依赖 GroundingDINO：
+
+- `weights/segmentation/sam3.1`，必要时可配置 `sam3`
+- `weights/segmentation/BiRefNet`
+- `weights/tagger/wd14_tagger_with_embeddings`
+- `weights/vlm/Qwen2.5-VL-7B-Instruct` 或 Florence
+
+`raw/screenshots/` 会被重点用于提取角色主体性、动作、镜头、构图、场景背景、特效光照和战斗氛围。GroundingDINO 代码保留为未来可选扩展，但默认禁用。
+
+SAM3 / SAM3.1 不安装在当前主仓库环境里，而是运行在独立 conda 环境 `sam3` 中。主仓库通过 `conda run` 调用外部 CLI：
+
+```powershell
+python scripts/check_sam3_env.py `
+  --python-exe "D:/Program Files/anaconda3/envs/sam3/python.exe" `
+  --sam3-repo-dir "F:/python_project/game-aigc-asset-workflow/sam3" `
+  --sam3-model-root "F:/python_project/game-aigc-asset-workflow/weights/segmentation/sam3.1" `
+  --offline
+conda run -n sam3 python scripts/sam3_segment_cli.py `
+  --image data/reference_packs/firefly_v1/selected/init/firefly_poster_01.jpg `
+  --out-dir outputs/debug_sam3/firefly_poster_01 `
+  --sam3-repo-dir "F:/python_project/game-aigc-asset-workflow/sam3" `
+  --sam3-model-root "F:/python_project/game-aigc-asset-workflow/weights/segmentation/sam3.1" `
+  --offline `
+  --prompts "person" "anime character" "main subject" `
+  --device cuda
+```
+
+`sam3_repo_dir` 指向 SAM3 源码目录，`sam3_model_root` 指向本地 SAM3/SAM3.1 权重目录，两者不是同一个概念。CLI 会拒绝无本地路径调用 `build_sam3_image_model()`，因为那可能访问 HuggingFace 的 `facebook/sam3`。如果看到 401 / gated repo，优先检查 `sam3_model_root`、`sam3_config_path`、`sam3_checkpoint_path`。
+
+如果模型缺失、依赖缺失、加载失败或推理失败，strict-real 会直接报错并停止，不会写 `mock: true` 的假分析文件。
+
+只有显式指定时才允许 mock：
+
+```powershell
+python scripts/analyze_references.py --pack data/reference_packs/firefly_v1 --provider mock
 ```
 
 脚本会自动创建并写入：
@@ -158,14 +212,14 @@ processed/style/<asset_id>/
   prompt_bundle.json
 ```
 
-当前 Detection / Segmentation / VLM / Tagger 可以是 mock provider，但输出结构保持稳定，后续可替换真实模型。
+当前 `analyze_references.py` 默认使用真实 provider。mock 只用于单元测试或调试，必须显式传 `--provider mock`。
 
 ### 6. 生成 generation tasks
 
-默认每张 raw 只取 top-3 style，避免 10 x 20 一次爆量：
+只有一张主图 + 多张风格图时，使用 `single_init_all_styles`：
 
 ```powershell
-python scripts/build_tasks.py --pack data/reference_packs/firefly_v1 --mode topk_style_per_raw --topk 3
+python scripts/build_tasks.py --pack data/reference_packs/firefly_v1 --mode single_init_all_styles
 ```
 
 输出：
@@ -233,21 +287,18 @@ python scripts/generate_report.py --run-manifest results/runs/<run_id>/run_manif
 - workflow 导入 / registry / active 切换
 - active workflow inspect
 - reference pack 扫描
+- SAM3.1 / BiRefNet / WD14 / VLM 真实 reference analysis
 - manifest / prompt_sheet / generation_tasks 自动生成
 - workflow patch dry-run
 - ComfyUI HTTP API submit / poll / download
 - run manifest / batch summary / patched workflow 保存
 
-Mock/provider：
+仍是 mock/provider 或显式调试：
 
-- detection
-- segmentation
-- VLM caption / critique
-- tagger
-- palette analysis
+- `analyze_references.py --provider mock`：仅测试/调试，必须显式指定
 - CLIP / aesthetic / technical / VLM / wallpaper scoring
 
-这些 mock 不影响流程跑通，后续替换 provider 即可。
+默认 reference analysis 已不是 mock。真实模式失败会直接报错，不会静默 fallback。
 
 ## 文件职责
 

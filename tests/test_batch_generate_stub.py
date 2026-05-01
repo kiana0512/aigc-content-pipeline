@@ -25,6 +25,13 @@ class FakeRuntime:
             "workflow_template_path": "active.json",
             "active_workflow": {"workflow_id": "active_test"},
             "patch_warnings": [],
+            "patched_fields": {},
+            "skipped_fields": {},
+            "skipped_model_patch_fields": [],
+            "preserved_template_model_fields": [],
+            "explicit_model_patch_fields_used": [],
+            "preserve_template_models": False,
+            "copied_uploaded_image_names": {},
         }
 
     def workflow_template_path(self, workflow):
@@ -59,7 +66,16 @@ def test_batch_generate_execute_with_fake_client(tmp_path, monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def submit_prompt(self, workflow):
+        def get_object_info(self):
+            return {}
+
+        def get_history(self, prompt_id):
+            return {}
+
+        def view_image_exists(self, *args, **kwargs):
+            return True
+
+        def submit_prompt(self, workflow, debug_dir=None, file_prefix="", **kwargs):
             return "prompt-1"
 
         def poll_history(self, prompt_id, timeout_sec=600):

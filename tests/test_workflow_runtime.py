@@ -67,3 +67,40 @@ def test_workflow_runtime_supports_multi_inputs_and_prompt_bundle(tmp_path):
     assert values["identity_ref_images_first"] == "id1.png"
     assert values["character_mask"] == "mask.png"
     assert values["prompt_bundle"]["negative_prompt"] == "bundle negative"
+
+
+def test_workflow_runtime_patches_registry_node_inputs_and_images(tmp_path):
+    image = tmp_path / "init.png"
+    image.write_bytes(b"image")
+    workflow_json = tmp_path / "api.json"
+    write_json(
+        workflow_json,
+        {
+            "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "old positive"}},
+            "2": {"class_type": "LoadImage", "inputs": {"image": "old.png"}},
+            "3": {"class_type": "VAEEncode", "inputs": {"pixels": ["2", 0]}},
+            "4": {"class_type": "KSampler", "inputs": {"positive": ["1", 0], "latent_image": ["3", 0], "seed": 1, "steps": 10, "cfg": 4, "sampler_name": "euler", "scheduler": "normal", "denoise": 1}},
+            "5": {"class_type": "SaveImage", "inputs": {"images": ["4", 0], "filename_prefix": "old"}},
+        },
+    )
+    registry = WorkflowRegistry(
+        registry_dir=tmp_path / "registry",
+        active_path=tmp_path / "active.yaml",
+        workflow_dir=tmp_path / "registered",
+    )
+    registry.import_workflow(workflow_json, "patchable", set_active=True)
+    built = WorkflowRuntime(workflow_registry=registry).build_from_config(
+        "configs/generation/firefly_wallpaper.yaml",
+        prompt_row={"positive_prompt": "new prompt", "init_image": str(image), "seed": "123", "output_prefix": "run/out"},
+        run_id="run1",
+        comfy_input_dir=tmp_path / "comfy_input",
+        dry_run=True,
+    )
+
+    workflow = built["workflow"]
+    assert workflow["1"]["inputs"]["text"] == "new prompt"
+    assert workflow["2"]["inputs"]["image"].startswith("aigc2d/run1/")
+    assert workflow["4"]["inputs"]["seed"] == "123"
+    assert workflow["5"]["inputs"]["filename_prefix"] == "run/out"
+    assert built["patched_fields"]["init_image"]["node_id"] == "2"
+    assert built["copied_uploaded_image_names"]["init_image"].startswith("aigc2d/run1/")

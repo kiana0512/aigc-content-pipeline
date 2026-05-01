@@ -9,3 +9,11 @@ dependencies:
       - requests
       - pydantic
       - pytest
+      - pillow
+      - numpy
+      - opencv-python
+      - torch
+      - torchvision
+      - transformers>=4.51.0,<6
+      - qwen-vl-utils
+      - onnxruntime

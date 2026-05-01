@@ -1,0 +1,968 @@
+workflow_id: img2img_ipadapter_depth_lora_4k_v2
+workflow_json_path: F:\python_project\game-aigc-asset-workflow\workflows\comfyui\registered\img2img_ipadapter_depth_lora_4k_v2.json
+source_json_path: workflows\comfyui\_raw_exports\img2img_ipadapter_depth_lora_4k_v2_repaired_uniform_x20.json
+source_raw_json_path: workflows\comfyui\_raw_exports\img2img_ipadapter_depth_lora_4k_v2_repaired_uniform_x20.json
+imported_time: '2026-05-01T12:17:19.354844+00:00'
+created_at: '2026-05-01T12:17:19.354844+00:00'
+updated_at: '2026-05-01T12:17:19.354844+00:00'
+workflow_type: img2img_ipadapter_controlnet
+auto_analyzed: true
+supported_inputs: &id057 []
+optional_modules:
+  lora: true
+  ipadapter: true
+  controlnet: true
+  upscale: true
+  vae: true
+detected_modules:
+  checkpoint: true
+  vae: true
+  lora: true
+  clip_vision: true
+  ipadapter: true
+  controlnet: true
+  preprocessors: []
+  sampler: true
+  upscale: true
+  video: false
+node_inventory:
+  '1':
+    class_type: CheckpointLoaderSimple
+    title: Checkpoint加载器（简易）
+    input_keys:
+    - ckpt_name
+    upstream_node_refs: &id001 []
+    downstream_node_refs: &id029
+    - node_id: '3'
+      input: model
+      output_index: 0
+    - node_id: '3'
+      input: clip
+      output_index: 1
+  '2':
+    class_type: VAELoader
+    title: 加载VAE
+    input_keys:
+    - vae_name
+    upstream_node_refs: &id002 []
+    downstream_node_refs: &id030
+    - node_id: '15'
+      input: vae
+      output_index: 0
+    - node_id: '20'
+      input: vae
+      output_index: 0
+    - node_id: '22'
+      input: vae
+      output_index: 0
+    - node_id: '28'
+      input: vae
+      output_index: 0
+    - node_id: '31'
+      input: vae
+      output_index: 0
+  '3':
+    class_type: LoraLoader
+    title: 加载LoRA
+    input_keys:
+    - lora_name
+    - strength_model
+    - strength_clip
+    - model
+    - clip
+    upstream_node_refs: &id003
+    - node_id: '1'
+      input: model
+      output_index: 0
+    - node_id: '1'
+      input: clip
+      output_index: 1
+    downstream_node_refs: &id031
+    - node_id: '8'
+      input: clip
+      output_index: 1
+    - node_id: '9'
+      input: clip
+      output_index: 1
+    - node_id: '17'
+      input: model
+      output_index: 0
+  '4':
+    class_type: CLIPVisionLoader
+    title: 加载CLIP视觉
+    input_keys:
+    - clip_name
+    upstream_node_refs: &id004 []
+    downstream_node_refs: &id032
+    - node_id: '17'
+      input: clip_vision
+      output_index: 0
+    - node_id: '18'
+      input: clip_vision
+      output_index: 0
+    - node_id: '19'
+      input: clip_vision
+      output_index: 0
+  '5':
+    class_type: IPAdapterModelLoader
+    title: IPAdapter Model Loader
+    input_keys:
+    - ipadapter_file
+    upstream_node_refs: &id005 []
+    downstream_node_refs: &id033
+    - node_id: '17'
+      input: ipadapter
+      output_index: 0
+    - node_id: '18'
+      input: ipadapter
+      output_index: 0
+    - node_id: '19'
+      input: ipadapter
+      output_index: 0
+  '6':
+    class_type: ControlNetLoader
+    title: 加载ControlNet模型
+    input_keys:
+    - control_net_name
+    upstream_node_refs: &id006 []
+    downstream_node_refs: &id034
+    - node_id: '20'
+      input: control_net
+      output_index: 0
+  '7':
+    class_type: UpscaleModelLoader
+    title: 加载放大模型
+    input_keys:
+    - model_name
+    upstream_node_refs: &id007 []
+    downstream_node_refs: &id035
+    - node_id: '24'
+      input: upscale_model
+      output_index: 0
+  '8':
+    class_type: CLIPTextEncode
+    title: CLIP文本编码
+    input_keys:
+    - text
+    - clip
+    upstream_node_refs: &id008
+    - node_id: '3'
+      input: clip
+      output_index: 1
+    downstream_node_refs: &id036
+    - node_id: '20'
+      input: positive
+      output_index: 0
+  '9':
+    class_type: CLIPTextEncode
+    title: CLIP文本编码
+    input_keys:
+    - text
+    - clip
+    upstream_node_refs: &id009
+    - node_id: '3'
+      input: clip
+      output_index: 1
+    downstream_node_refs: &id037
+    - node_id: '20'
+      input: negative
+      output_index: 0
+  '10':
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+    upstream_node_refs: &id010 []
+    downstream_node_refs: &id038
+    - node_id: '15'
+      input: pixels
+      output_index: 0
+    - node_id: '20'
+      input: image
+      output_index: 0
+  '11':
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+    upstream_node_refs: &id011 []
+    downstream_node_refs: &id039
+    - node_id: '17'
+      input: image
+      output_index: 0
+  '12':
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+    upstream_node_refs: &id012 []
+    downstream_node_refs: &id040
+    - node_id: '19'
+      input: image
+      output_index: 0
+  '13':
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+    upstream_node_refs: &id013 []
+    downstream_node_refs: &id041
+    - node_id: '18'
+      input: image
+      output_index: 0
+  '15':
+    class_type: VAEEncode
+    title: VAE编码
+    input_keys:
+    - pixels
+    - vae
+    upstream_node_refs: &id014
+    - node_id: '10'
+      input: pixels
+      output_index: 0
+    - node_id: '2'
+      input: vae
+      output_index: 0
+    downstream_node_refs: &id042
+    - node_id: '21'
+      input: latent_image
+      output_index: 0
+  '17':
+    class_type: IPAdapterAdvanced
+    title: IPAdapter Advanced
+    input_keys:
+    - weight
+    - weight_type
+    - combine_embeds
+    - start_at
+    - end_at
+    - embeds_scaling
+    - model
+    - ipadapter
+    - image
+    - clip_vision
+    upstream_node_refs: &id015
+    - node_id: '3'
+      input: model
+      output_index: 0
+    - node_id: '5'
+      input: ipadapter
+      output_index: 0
+    - node_id: '11'
+      input: image
+      output_index: 0
+    - node_id: '4'
+      input: clip_vision
+      output_index: 0
+    downstream_node_refs: &id043
+    - node_id: '18'
+      input: model
+      output_index: 0
+  '18':
+    class_type: IPAdapterAdvanced
+    title: IPAdapter Advanced
+    input_keys:
+    - weight
+    - weight_type
+    - combine_embeds
+    - start_at
+    - end_at
+    - embeds_scaling
+    - model
+    - ipadapter
+    - image
+    - clip_vision
+    upstream_node_refs: &id016
+    - node_id: '17'
+      input: model
+      output_index: 0
+    - node_id: '5'
+      input: ipadapter
+      output_index: 0
+    - node_id: '13'
+      input: image
+      output_index: 0
+    - node_id: '4'
+      input: clip_vision
+      output_index: 0
+    downstream_node_refs: &id044
+    - node_id: '19'
+      input: model
+      output_index: 0
+  '19':
+    class_type: IPAdapterAdvanced
+    title: IPAdapter Advanced
+    input_keys:
+    - weight
+    - weight_type
+    - combine_embeds
+    - start_at
+    - end_at
+    - embeds_scaling
+    - model
+    - ipadapter
+    - image
+    - clip_vision
+    upstream_node_refs: &id017
+    - node_id: '18'
+      input: model
+      output_index: 0
+    - node_id: '5'
+      input: ipadapter
+      output_index: 0
+    - node_id: '12'
+      input: image
+      output_index: 0
+    - node_id: '4'
+      input: clip_vision
+      output_index: 0
+    downstream_node_refs: &id045
+    - node_id: '21'
+      input: model
+      output_index: 0
+    - node_id: '27'
+      input: model
+      output_index: 0
+  '20':
+    class_type: ControlNetApplyAdvanced
+    title: 应用ControlNet（旧版高级）
+    input_keys:
+    - strength
+    - start_percent
+    - end_percent
+    - positive
+    - negative
+    - control_net
+    - image
+    - vae
+    upstream_node_refs: &id018
+    - node_id: '8'
+      input: positive
+      output_index: 0
+    - node_id: '9'
+      input: negative
+      output_index: 0
+    - node_id: '6'
+      input: control_net
+      output_index: 0
+    - node_id: '10'
+      input: image
+      output_index: 0
+    - node_id: '2'
+      input: vae
+      output_index: 0
+    downstream_node_refs: &id046
+    - node_id: '21'
+      input: positive
+      output_index: 0
+    - node_id: '21'
+      input: negative
+      output_index: 1
+    - node_id: '27'
+      input: positive
+      output_index: 0
+    - node_id: '27'
+      input: negative
+      output_index: 1
+  '21':
+    class_type: KSampler
+    title: K采样器
+    input_keys:
+    - seed
+    - steps
+    - cfg
+    - sampler_name
+    - scheduler
+    - denoise
+    - model
+    - positive
+    - negative
+    - latent_image
+    upstream_node_refs: &id019
+    - node_id: '19'
+      input: model
+      output_index: 0
+    - node_id: '20'
+      input: positive
+      output_index: 0
+    - node_id: '20'
+      input: negative
+      output_index: 1
+    - node_id: '15'
+      input: latent_image
+      output_index: 0
+    downstream_node_refs: &id047
+    - node_id: '22'
+      input: samples
+      output_index: 0
+  '22':
+    class_type: VAEDecode
+    title: VAE解码
+    input_keys:
+    - samples
+    - vae
+    upstream_node_refs: &id020
+    - node_id: '21'
+      input: samples
+      output_index: 0
+    - node_id: '2'
+      input: vae
+      output_index: 0
+    downstream_node_refs: &id048
+    - node_id: '23'
+      input: images
+      output_index: 0
+    - node_id: '24'
+      input: image
+      output_index: 0
+    - node_id: '25'
+      input: image
+      output_index: 0
+  '23':
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+    upstream_node_refs: &id021
+    - node_id: '22'
+      input: images
+      output_index: 0
+    downstream_node_refs: &id049 []
+  '24':
+    class_type: ImageUpscaleWithModel
+    title: 使用模型放大图像
+    input_keys:
+    - upscale_model
+    - image
+    upstream_node_refs: &id022
+    - node_id: '7'
+      input: upscale_model
+      output_index: 0
+    - node_id: '22'
+      input: image
+      output_index: 0
+    downstream_node_refs: &id050
+    - node_id: '32'
+      input: images
+      output_index: 0
+  '25':
+    class_type: ImageScale
+    title: 缩放图像
+    input_keys:
+    - upscale_method
+    - width
+    - height
+    - crop
+    - image
+    upstream_node_refs: &id023
+    - node_id: '22'
+      input: image
+      output_index: 0
+    downstream_node_refs: &id051
+    - node_id: '31'
+      input: pixels
+      output_index: 0
+  '27':
+    class_type: KSampler
+    title: K采样器
+    input_keys:
+    - seed
+    - steps
+    - cfg
+    - sampler_name
+    - scheduler
+    - denoise
+    - model
+    - positive
+    - negative
+    - latent_image
+    upstream_node_refs: &id024
+    - node_id: '19'
+      input: model
+      output_index: 0
+    - node_id: '20'
+      input: positive
+      output_index: 0
+    - node_id: '20'
+      input: negative
+      output_index: 1
+    - node_id: '31'
+      input: latent_image
+      output_index: 0
+    downstream_node_refs: &id052
+    - node_id: '28'
+      input: samples
+      output_index: 0
+  '28':
+    class_type: VAEDecode
+    title: VAE解码
+    input_keys:
+    - samples
+    - vae
+    upstream_node_refs: &id025
+    - node_id: '27'
+      input: samples
+      output_index: 0
+    - node_id: '2'
+      input: vae
+      output_index: 0
+    downstream_node_refs: &id053
+    - node_id: '29'
+      input: images
+      output_index: 0
+  '29':
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+    upstream_node_refs: &id026
+    - node_id: '28'
+      input: images
+      output_index: 0
+    downstream_node_refs: &id054 []
+  '31':
+    class_type: VAEEncode
+    title: VAE编码
+    input_keys:
+    - pixels
+    - vae
+    upstream_node_refs: &id027
+    - node_id: '25'
+      input: pixels
+      output_index: 0
+    - node_id: '2'
+      input: vae
+      output_index: 0
+    downstream_node_refs: &id055
+    - node_id: '27'
+      input: latent_image
+      output_index: 0
+  '32':
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+    upstream_node_refs: &id028
+    - node_id: '24'
+      input: images
+      output_index: 0
+    downstream_node_refs: &id056 []
+graph:
+  upstream_map:
+    '1': *id001
+    '2': *id002
+    '3': *id003
+    '4': *id004
+    '5': *id005
+    '6': *id006
+    '7': *id007
+    '8': *id008
+    '9': *id009
+    '10': *id010
+    '11': *id011
+    '12': *id012
+    '13': *id013
+    '15': *id014
+    '17': *id015
+    '18': *id016
+    '19': *id017
+    '20': *id018
+    '21': *id019
+    '22': *id020
+    '23': *id021
+    '24': *id022
+    '25': *id023
+    '27': *id024
+    '28': *id025
+    '29': *id026
+    '31': *id027
+    '32': *id028
+  downstream_map:
+    '1': *id029
+    '2': *id030
+    '3': *id031
+    '4': *id032
+    '5': *id033
+    '6': *id034
+    '7': *id035
+    '8': *id036
+    '9': *id037
+    '10': *id038
+    '11': *id039
+    '12': *id040
+    '13': *id041
+    '15': *id042
+    '17': *id043
+    '18': *id044
+    '19': *id045
+    '20': *id046
+    '21': *id047
+    '22': *id048
+    '23': *id049
+    '24': *id050
+    '25': *id051
+    '27': *id052
+    '28': *id053
+    '29': *id054
+    '31': *id055
+    '32': *id056
+placeholders: *id057
+patch_contract:
+  node_inputs:
+    ckpt_name: &id058
+      node_id: '1'
+      input: ckpt_name
+      optional: true
+      source: auto
+      field: ckpt_name
+    vae_name: &id059
+      node_id: '2'
+      input: vae_name
+      optional: true
+      source: auto
+      field: vae_name
+    lora_name: &id060
+      node_id: '3'
+      input: lora_name
+      optional: true
+      source: auto
+      field: lora_name
+    lora_strength_model: &id061
+      node_id: '3'
+      input: strength_model
+      optional: true
+      source: auto
+      field: lora_strength_model
+    lora_strength_clip: &id062
+      node_id: '3'
+      input: strength_clip
+      optional: true
+      source: auto
+      field: lora_strength_clip
+    clip_vision_name: &id063
+      node_id: '4'
+      input: clip_name
+      optional: true
+      source: auto
+      field: clip_vision_name
+    ipadapter_file: &id064
+      node_id: '5'
+      input: ipadapter_file
+      optional: true
+      source: auto
+      field: ipadapter_file
+    control_net_name: &id065
+      node_id: '6'
+      input: control_net_name
+      optional: true
+      source: auto
+      field: control_net_name
+    upscale_model_name: &id066
+      node_id: '7'
+      input: model_name
+      optional: true
+      source: auto
+      field: upscale_model_name
+    positive_prompt:
+      node_id: '8'
+      input: text
+      optional: false
+      source: auto
+      field: positive_prompt
+    negative_prompt:
+      node_id: '9'
+      input: text
+      optional: false
+      source: auto
+      field: negative_prompt
+    init_image:
+      node_id: '10'
+      input: image
+      optional: false
+      source: auto
+      field: init_image
+    identity_ref_image:
+      node_id: '11'
+      input: image
+      optional: true
+      source: auto_order_inferred
+      field: identity_ref_image
+    style_ref_image:
+      node_id: '12'
+      input: image
+      optional: true
+      source: auto_order_inferred
+      field: style_ref_image
+    composition_ref_image:
+      node_id: '13'
+      input: image
+      optional: true
+      source: auto_order_inferred
+      field: composition_ref_image
+    seed:
+      node_id: '21'
+      input: seed
+      optional: true
+      source: auto
+      field: seed
+    steps:
+      node_id: '21'
+      input: steps
+      optional: true
+      source: auto
+      field: steps
+    cfg:
+      node_id: '21'
+      input: cfg
+      optional: true
+      source: auto
+      field: cfg
+    sampler_name:
+      node_id: '21'
+      input: sampler_name
+      optional: true
+      source: auto
+      field: sampler_name
+    scheduler:
+      node_id: '21'
+      input: scheduler
+      optional: true
+      source: auto
+      field: scheduler
+    denoise:
+      node_id: '21'
+      input: denoise
+      optional: true
+      source: auto
+      field: denoise
+    second_seed:
+      node_id: '27'
+      input: seed
+      optional: true
+      source: auto
+      field: second_seed
+    second_steps:
+      node_id: '27'
+      input: steps
+      optional: true
+      source: auto
+      field: second_steps
+    second_cfg:
+      node_id: '27'
+      input: cfg
+      optional: true
+      source: auto
+      field: second_cfg
+    second_sampler_name:
+      node_id: '27'
+      input: sampler_name
+      optional: true
+      source: auto
+      field: second_sampler_name
+    second_scheduler:
+      node_id: '27'
+      input: scheduler
+      optional: true
+      source: auto
+      field: second_scheduler
+    second_denoise:
+      node_id: '27'
+      input: denoise
+      optional: true
+      source: auto
+      field: second_denoise
+    first_pass_prefix:
+      node_id: '23'
+      input: filename_prefix
+      optional: true
+      source: auto
+      field: first_pass_prefix
+    second_pass_prefix:
+      node_id: '29'
+      input: filename_prefix
+      optional: true
+      source: auto
+      field: second_pass_prefix
+    upscale_prefix:
+      node_id: '32'
+      input: filename_prefix
+      optional: true
+      source: auto
+      field: upscale_prefix
+    width:
+      node_id: '25'
+      input: width
+      optional: true
+      source: auto
+      field: width
+    height:
+      node_id: '25'
+      input: height
+      optional: true
+      source: auto
+      field: height
+candidates:
+  prompt_nodes:
+  - node_id: '8'
+    class_type: CLIPTextEncode
+    title: CLIP文本编码
+    input_keys:
+    - text
+    - clip
+  - node_id: '9'
+    class_type: CLIPTextEncode
+    title: CLIP文本编码
+    input_keys:
+    - text
+    - clip
+  image_nodes:
+  - node_id: '10'
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+  - node_id: '11'
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+  - node_id: '12'
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+  - node_id: '13'
+    class_type: LoadImage
+    title: 加载图像
+    input_keys:
+    - image
+  sampler_nodes:
+  - node_id: '21'
+    class_type: KSampler
+    title: K采样器
+    input_keys:
+    - seed
+    - steps
+    - cfg
+    - sampler_name
+    - scheduler
+    - denoise
+    - model
+    - positive
+    - negative
+    - latent_image
+  - node_id: '27'
+    class_type: KSampler
+    title: K采样器
+    input_keys:
+    - seed
+    - steps
+    - cfg
+    - sampler_name
+    - scheduler
+    - denoise
+    - model
+    - positive
+    - negative
+    - latent_image
+  save_nodes:
+  - node_id: '23'
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+  - node_id: '29'
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+  - node_id: '32'
+    class_type: SaveImage
+    title: 保存图像
+    input_keys:
+    - filename_prefix
+    - images
+  model_nodes:
+  - node_id: '1'
+    class_type: CheckpointLoaderSimple
+    title: Checkpoint加载器（简易）
+    input_keys:
+    - ckpt_name
+  - node_id: '2'
+    class_type: VAELoader
+    title: 加载VAE
+    input_keys:
+    - vae_name
+  - node_id: '3'
+    class_type: LoraLoader
+    title: 加载LoRA
+    input_keys:
+    - lora_name
+    - strength_model
+    - strength_clip
+    - model
+    - clip
+  - node_id: '4'
+    class_type: CLIPVisionLoader
+    title: 加载CLIP视觉
+    input_keys:
+    - clip_name
+  - node_id: '5'
+    class_type: IPAdapterModelLoader
+    title: IPAdapter Model Loader
+    input_keys:
+    - ipadapter_file
+  - node_id: '6'
+    class_type: ControlNetLoader
+    title: 加载ControlNet模型
+    input_keys:
+    - control_net_name
+  - node_id: '7'
+    class_type: UpscaleModelLoader
+    title: 加载放大模型
+    input_keys:
+    - model_name
+  size_nodes:
+  - node_id: '25'
+    class_type: ImageScale
+    title: 缩放图像
+    input_keys:
+    - upscale_method
+    - width
+    - height
+    - crop
+    - image
+  model_fields:
+    ckpt_name:
+    - *id058
+    vae_name:
+    - *id059
+    lora_name:
+    - *id060
+    lora_strength_model:
+    - *id061
+    lora_strength_clip:
+    - *id062
+    clip_vision_name:
+    - *id063
+    ipadapter_file:
+    - *id064
+    control_net_name:
+    - *id065
+    upscale_model_name:
+    - *id066
+ambiguous_candidates:
+  image_roles: []
+  prompt_roles: []
+  sampler_roles: []
+warnings:
+- IPAdapter image roles inferred by order; please verify identity/style/composition
+  mapping.
+manual_overrides:
+  enabled: true
+  notes: ''

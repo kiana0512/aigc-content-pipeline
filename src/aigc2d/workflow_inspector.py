@@ -12,14 +12,22 @@ from .workflow_registry import WorkflowMetadata, WorkflowRegistry, find_placehol
 def inspect_workflow(metadata: WorkflowMetadata) -> dict[str, Any]:
     workflow = load_json(metadata.workflow_json_path)
     placeholders = find_placeholders(workflow)
+    errors, warnings = validate_patch_contract(workflow, metadata.patch_contract)
     return {
         "workflow_id": metadata.workflow_id,
         "workflow_path": metadata.workflow_json_path,
+        "registry_path": str(WorkflowRegistry().metadata_path(metadata.workflow_id)),
         "workflow_type": metadata.workflow_type,
         "optional_modules": metadata.optional_modules,
+        "detected_modules": metadata.detected_modules or metadata.optional_modules,
+        "node_inventory": metadata.node_inventory,
+        "graph": metadata.graph,
         "placeholders": placeholders,
         "patch_contract": metadata.patch_contract,
-        "warnings": metadata.warnings,
+        "candidates": metadata.candidates,
+        "ambiguous_candidates": metadata.ambiguous_candidates,
+        "warnings": [*metadata.warnings, *warnings],
+        "errors": errors,
     }
 
 
@@ -50,3 +58,21 @@ def check_model_mapping(generation_config: dict[str, Any] | None = None) -> list
         except KeyError:
             warnings.append(f"Missing model profile mapping: {section}.{name}")
     return warnings
+
+
+def validate_patch_contract(workflow: dict[str, Any], patch_contract: dict[str, Any]) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    for field_name, mapping in (patch_contract.get("node_inputs") or {}).items():
+        node_id = str(mapping.get("node_id", ""))
+        input_name = str(mapping.get("input", ""))
+        optional = bool(mapping.get("optional", True))
+        if node_id not in workflow:
+            message = f"registry mapping points to missing node: {field_name} -> {node_id}"
+            (warnings if optional else errors).append(message)
+            continue
+        inputs = workflow[node_id].get("inputs", {})
+        if not isinstance(inputs, dict) or input_name not in inputs:
+            message = f"registry mapping points to missing input: {field_name} -> {node_id}.{input_name}"
+            (warnings if optional else errors).append(message)
+    return errors, warnings

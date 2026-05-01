@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -19,14 +20,154 @@ class ComfyClient:
         response.raise_for_status()
         return response.json()
 
-    def submit_prompt(self, workflow_json: dict[str, Any]) -> str:
-        payload = {
-            "prompt": workflow_json,
-            "client_id": self.client_id,
-        }
-        response = requests.post(f"{self.base_url}/prompt", json=payload, timeout=self.timeout)
+    def get_object_info(self) -> dict[str, Any]:
+        response = requests.get(f"{self.base_url}/object_info", timeout=self.timeout)
         response.raise_for_status()
-        return str(response.json()["prompt_id"])
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+
+    def get_history(self, prompt_id: str) -> dict[str, Any]:
+        response = requests.get(f"{self.base_url}/history/{prompt_id}", timeout=self.timeout)
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+
+    def view_image_exists(
+        self,
+        filename: str,
+        subfolder: str = "",
+        *,
+        image_type: str = "input",
+    ) -> bool:
+        """Return True if ComfyUI can serve /view for this input/output image."""
+        response = requests.get(
+            f"{self.base_url}/view",
+            params={"filename": filename, "subfolder": subfolder, "type": image_type},
+            timeout=self.timeout,
+        )
+        return response.ok
+
+    def upload_image(
+        self,
+        image_path: str | Path,
+        *,
+        subfolder: str,
+        image_type: str = "input",
+        overwrite: bool = True,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        POST /upload/image (ComfyUI standard).
+        Returns JSON with keys like name, subfolder, type.
+        """
+        path = Path(image_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"upload_image: file not found: {path}")
+        upload_name = filename or path.name
+        with path.open("rb") as fh:
+            response = requests.post(
+                f"{self.base_url}/upload/image",
+                files={"image": (upload_name, fh)},
+                data={
+                    "type": image_type,
+                    "subfolder": subfolder.replace("\\", "/"),
+                    "overwrite": "true" if overwrite else "false",
+                },
+                timeout=max(self.timeout, 120),
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def load_image_value_from_upload_result(result: dict[str, Any]) -> str:
+        """Build LoadImage `image` field from upload JSON."""
+        name = str(result.get("name") or result.get("filename") or "").strip()
+        subfolder = str(result.get("subfolder") or "").strip().replace("\\", "/")
+        if subfolder:
+            return f"{subfolder}/{name}".strip("/").replace("//", "/")
+        return name
+
+    def submit_prompt(
+        self,
+        workflow_json: dict[str, Any],
+        debug_dir: str | Path | None = None,
+        *,
+        file_prefix: str = "",
+    ) -> str:
+        payload = {"prompt": workflow_json, "client_id": self.client_id}
+        url = f"{self.base_url}/prompt"
+        dbg = Path(debug_dir) if debug_dir else None
+        pf = file_prefix.strip()
+        stem = f"{pf}_" if pf else ""
+
+        try:
+            if dbg is not None:
+                dbg.mkdir(parents=True, exist_ok=True)
+                ppath = dbg / f"{stem}comfy_submit_payload.json"
+                ppath.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            response = requests.post(url, json=payload, timeout=self.timeout)
+
+            if response.ok:
+                data = response.json()
+                pid = data.get("prompt_id") if isinstance(data, dict) else None
+                if not pid:
+                    raise RuntimeError(f"ComfyUI /prompt succeeded but missing prompt_id: {data}")
+                return str(pid)
+
+            err_txt = response.text.strip() or "(empty body)"
+            err_json_text = ""
+            pj: dict[str, Any] | Any | None = None
+            try:
+                pj = response.json()
+                err_json_text = json.dumps(pj, ensure_ascii=False, indent=2)
+            except Exception:
+                pj = None
+
+            print("\n=== ComfyUI /prompt submit failed ===")
+            print(f"URL: {url}")
+            print(f"Status: {response.status_code}")
+            print("Response body (text):")
+            print(err_txt[:8000])
+            if err_json_text:
+                print("Response JSON (pretty):")
+                print(err_json_text[:12000])
+
+            if dbg:
+                error_path = dbg / f"{stem}comfy_submit_error.json"
+                error_bucket: dict[str, Any] = {
+                    "url": url,
+                    "status_code": response.status_code,
+                    "text": response.text,
+                }
+                if isinstance(pj, dict):
+                    error_bucket["parsed"] = pj
+                elif pj is not None:
+                    error_bucket["parsed_raw"] = pj
+                error_path.write_text(json.dumps(error_bucket, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            core = err_json_text or err_txt
+            suffix_lines: list[str] = []
+            if dbg:
+                suffix_lines.append(f"Payload saved to: {dbg / f'{stem}comfy_submit_payload.json'}")
+                suffix_lines.append(f"Error saved to: {dbg / f'{stem}comfy_submit_error.json'}")
+            suffix = ("\n" + "\n".join(suffix_lines)) if suffix_lines else ""
+
+            raise RuntimeError(f"ComfyUI /prompt failed HTTP {response.status_code}: {core[:2000]}{suffix}")
+
+        except requests.RequestException as exc:
+            if dbg:
+                dbg.mkdir(parents=True, exist_ok=True)
+                (dbg / f"{stem}comfy_submit_payload.json").write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                (dbg / f"{stem}comfy_submit_error.json").write_text(
+                    json.dumps({"transport_error": repr(exc)}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            raise
 
     def submit_workflow(self, workflow: dict[str, Any], run_id: str) -> dict[str, Any]:
         prompt_id = self.submit_prompt(workflow)
@@ -99,6 +240,7 @@ class ComfyClient:
         return save_path
 
     def upload_input_image(self, image_path: Path) -> dict[str, Any]:
+        """Legacy shim: uploads to flat input folder (overwrite). Prefer upload_image(..., subfolder=...)."""
         with image_path.open("rb") as f:
             response = requests.post(
                 f"{self.base_url}/upload/image",

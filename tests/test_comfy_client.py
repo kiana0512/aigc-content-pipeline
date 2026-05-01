@@ -1,15 +1,22 @@
 from pathlib import Path
 
 from aigc2d.comfy_client import ComfyClient
+from aigc2d.comfy_input import ensure_comfy_input_image
 
 
 class FakeResponse:
-    def __init__(self, payload=None, content: bytes = b"image") -> None:
+    def __init__(self, payload=None, content: bytes = b"image", status_code: int = 200, text: str = "") -> None:
         self.payload = payload or {}
         self.content = content
+        self.status_code = status_code
+        self.text = text or ""
 
     def raise_for_status(self) -> None:
         return None
+
+    @property
+    def ok(self) -> bool:
+        return self.status_code < 400
 
     def json(self):
         return self.payload
@@ -42,3 +49,12 @@ def test_comfy_client_download(monkeypatch, tmp_path):
     monkeypatch.setattr("aigc2d.comfy_client.requests.get", fake_get)
     path = ComfyClient().download_image("a.png", "", "output", tmp_path / "a.png")
     assert Path(path).read_bytes() == b"png"
+
+
+def test_ensure_comfy_input_image_copies_with_hash(tmp_path):
+    image = tmp_path / "source.png"
+    image.write_bytes(b"png")
+    name = ensure_comfy_input_image(image, comfy_input_dir=tmp_path / "input", run_id="run1", dry_run=True)
+    assert name.startswith("aigc2d/run1/")
+    assert "\\" not in name
+    assert (tmp_path / "input" / name).exists()
